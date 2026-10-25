@@ -24,3 +24,19 @@ Stage Summary:
 - Ростер агентов BMM: Analyst (Mary), PM (John), UX Designer (Sally), Architect (Winston), Dev (Amelia) + скиллы workflows: product-brief, prd, architecture, create-epics-and-stories, sprint-planning, dev/build, code-review, review, retrospective, qa-generate-e2e-tests, brainstorming, advanced-elicitation, party-mode, help и др.
 - Дальнейшая работа по проекту (проектирование, разработка) ведётся по процессам BMAD: фазы Planning (brief/PRD/Architecture/UX) → Solutioning (epics/stories) → Implementation (sprint planning → dev → review → retro).
 - Обновление BMAD в будущем: `cd /home/z/my-project && npx bmad install` (или `npm run bmad -- install`), проверка: `npx bmad status`.
+
+---
+Task ID: 2
+Agent: main (Z.ai)
+Task: Добавить в постоянную память две директивы: (1) проверка и актуализация устаревающих данных/фактов, запрет галлюцинаций; (2) устойчивость к внезапному сбросу сессии — не терять прогресс и продолжать с места остановки.
+
+Work Log:
+- Спроектировано трёхуровневое решение непрерывности: worklog.md (журнал шагов, дополняется после каждого значимого шага) + раздел «Текущее состояние» в MEMORY.md (снимок статуса) + git-коммиты после каждой вехи.
+- Создан /home/z/my-project/MEMORY.md: Директива 1 (актуальность данных: что проверять через WebSearch/WebFetch, запрет выдумывать факты, пометка «требует проверки»), Директива 2 (протоколы начала/во время/завершения сессии, возобновление после сброса).
+- Протокол начала каждой сессии: MEMORY.md → worklog.md → git status/log → продолжение с места остановки.
+- Сделан контрольный git-коммит установленной конфигурации BMAD и файлов памяти.
+
+Stage Summary:
+- Постоянная память формализована в /home/z/my-project/MEMORY.md, читается первым действием в каждой новой сессии.
+- Механизм восстановления после сброса: worklog + git. Незавершённые шаги не теряются, завершённое не переделывается.
+- Ожидаемый следующий шаг: описание проекта пользователем → BMAD-фаза Planning.
