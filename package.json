@@ -1,0 +1,12 @@
+{
+  "name": "my-project",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Project managed with BMAD Method (https://github.com/bmad-code-org/bmad-method)",
+  "scripts": {
+    "bmad": "bmad"
+  },
+  "dependencies": {
+    "bmad-method": "6.12.4"
+  }
+}
