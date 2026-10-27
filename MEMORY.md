@@ -98,8 +98,9 @@ remote `origin` уже настроен в `.git/config` проекта.
 - **Выполнено:**
   - Task ID 1: BMAD METHOD v6.12.4 установлен и настроен (модуль bmm, claude-code + codex, языки RU).
   - Task ID 2: постоянная память (этот файл) + протоколы непрерывности.
-  - Task ID 3: восстановление после сброса (BMAD-скиллы, .gitignore → `/skills/`); концепция зарегистрирована в docs/; создан Product Brief (draft) в _bmad-output/planning-artifacts/briefs/brief-pult-seller-2026-10-27/brief.md; владелец сказал «продолжай» — бриф принят, конвейер продолжается.
+  - Task ID 3: восстановление после сброса (BMAD-скиллы, .gitignore → `/skills/`); концепция зарегистрирована в docs/; создан Product Brief в _bmad-output/planning-artifacts/briefs/brief-pult-seller-2026-10-27/brief.md.
   - Task ID 4: настроена синхронизация с GitHub (remote origin + токен в .git/config, Директива 3), весь прогресс запушен в main.
-- **В процессе:** Task ID 5 — BMAD bmad-prd: написание PRD из брифа + эталона v1.2.
-- **Следующий шаг:** после PRD → bmad-architecture → bmad-create-epics-and-stories (MVP Ф0) → bmad-sprint-planning → bmad-build. MVP = Ф0 (0–3 мес): M1–M4, M8-лайт, M10-лайт, M11-дайджест, адаптер WB полной глубины + чтение Ozon, 11 обязательных контрактов (5 v1.1 + 6 v1.2, гл. 9 эталона).
+  - Task ID 5: BMAD bmad-prd исполнен (fast-path, headless-подход): PRD «Пульт селлера» Ф0 написан, отревьюирован по 7-мерной рубрике (1 critical + 6 high устранены), статус final. Артефакты: _bmad-output/planning-artifacts/prds/prd-pult-seller-2026-10-27/ (prd.md — 35 FR/6 UJ/12 SM/11 контрактов; addendum.md — детализация для архитектора; review-rubric.md; .memlog.md). Открытые вопросы PRD (§8): глубина чтения Ozon (FBS/FBO в канбане), SLA-механика пула Б24, формат виджета, демо-данные, пороги алертов, правила пула, WTP ИИ-ролей.
+- **В процессе:** Task ID 6 — BMAD bmad-architecture: архитектура из PRD + addendum + эталона (гл. 9) в _bmad-output/planning-artifacts/architecture/.
+- **Следующий шаг:** после architecture → bmad-create-epics-and-stories (MVP Ф0) → bmad-sprint-planning → bmad-build. MVP = Ф0 (0–3 мес): M1–M4, M8-лайт, M10-лайт, M11-дайджест, адаптер WB полной глубины + чтение Ozon, 11 обязательных контрактов (5 v1.1 + 6 v1.2, гл. 9 эталона).
 - **Правило работы:** вся проектная работа (проектирование, разработка, документация) ведётся по методологии BMAD: агенты/воркфлоу из `_bmad/`, артефакты в `_bmad-output/`, знания проекта в `docs/`. Волатильные факты (налоги, правила площадок, тарифы) — проверять веб-поиском и сверять с протоколом мониторинга гл. 5 эталона.
