@@ -92,9 +92,10 @@ remote `origin` уже настроен в `.git/config` проекта.
 
 ## Текущее состояние (обновлять на каждой вехе и в конце сессии)
 
-- **Дата обновления:** 2026-10-27 (UTC+8)
+- **Дата обновления:** 2026-10-28 (UTC+8)
 - **Проект:** «Пульт селлера» — операционная система селлера маркетплейсов (WB/Ozon/ЯМ), 4 канала (Битрикс24 → amoCRM → retailCRM → standalone). Источник концепции: docs/Pult_Seller_Koncepciya_v1_2.md — ДЕЙСТВУЮЩИЙ ЭТАЛОН v1.2, подтверждён владельцем 27.10.2026; вся проектная работа опирается только на него.
-- **GitHub:** artemiosu/sellom-pult (приватный), ветка main, синхронизирован (HEAD = a97ac56). Пушить после каждой вехи (Директива 3).
+- **GitHub:** artemiosu/sellom-pult (приватный), ветка main, синхронизирован (push после каждой вехи, Директива 3).
+- **Стек-мандаты (обязательны ВСЕМ агентам при проектировании/разработке):** бэкенд ядра — Rust stable (Tokio/Axum/SQLx) — AD-20 (пересмотрен 28.10.2026 по требованию владельца: молниеносная скорость, минимальные ресурсы, 1000+ одновременных — AD-29); кэш-слой — **Valkey, НЕ Redis™** — мандат AD-28 (запрет Redis-образов CI-grep'ом; клиент redis-rs/valkey-glide допустим — RESP; сервер — всегда Valkey); фронтенд-бюджеты без фризов — AD-30.
 - **Выполнено:**
   - Task ID 1: BMAD METHOD v6.12.4 установлен и настроен (модуль bmm, claude-code + codex, языки RU).
   - Task ID 2: постоянная память (этот файл) + протоколы непрерывности.
@@ -102,6 +103,7 @@ remote `origin` уже настроен в `.git/config` проекта.
   - Task ID 4: настроена синхронизация с GitHub (remote origin + токен в .git/config, Директива 3), весь прогресс запушен в main.
   - Task ID 5: BMAD bmad-prd исполнен: PRD «Пульт селлера» Ф0 — статус final (35 FR/6 UJ/12 SM/11 контрактов; 1 critical + 6 high ревью устранены). Артефакты: _bmad-output/planning-artifacts/prds/prd-pult-seller-2026-10-27/ (prd.md, addendum.md, review-rubric.md, .memlog.md). Открытые вопросы PRD §8: глубина чтения Ozon (FBS/FBO), SLA-механика пула Б24, формат виджета, демо-данные, пороги, правила пула, WTP ИИ-ролей.
   - Task ID 6: BMAD bmad-architecture исполнен: ARCHITECTURE-SPINE.md — статус final, 27 AD (11 контрактов эталона [ADOPTED] + 16 архитектурных Winston), парадигма hexagonal + событийный конвейер, стек проверен вебом 27.10.2026 (Python 3.14.x/FastAPI 0.162.0/PG 18/ClickHouse 26.8 LTS/RabbitMQ 4.4.0/Redis 8.8.x, React 19/Vite 8), гейт: lint 0 + 3 параллельных ревьюера (рубрик, tech-currency, adversary) — 3 critical + ~10 high устранены (AD-22..27 добавлены, AD-5/14/15/16 ужесточены). Артефакты: _bmad-output/planning-artifacts/architecture/architecture-pult-seller-2026-10-27/ (ARCHITECTURE-SPINE.md, .memlog.md — 16 записей, reviews/×3).
-- **В процессе:** Task ID 7 — BMAD bmad-create-epics-and-stories: эпики и сторис MVP Ф0 из PRD (FR-1..35) + spine (AD-1..27) в _bmad-output/planning-artifacts/ (или epics/).
-- **Следующий шаг:** bmad-create-epics-and-stories → bmad-sprint-planning → bmad-build (разработка Ф0: Python/FastAPI-монорепа `pult/` по Structural Seed spine). Перед разработкой решить вопрос PRD 8.1 (глубина чтения Ozon) с владельцем.
+  - Task ID 7: пересмотр стека spine по вопросам владельца: AD-20 → Rust (1.99.1/Axum 0.8.9/Tokio 1.54.1/SQLx 0.9.0, версии верифицированы 28.10.2026); добавлены AD-28 (Valkey, НЕ Redis — мандат для dev-агентов), AD-29 (ёмкость 1000 одновременных), AD-30 (бюджет производительности фронтенда); Redis→Valkey по всему spine; memlog +7 записей. Spine: 30 AD, status final.
+- **В процессе:** Task ID 8 — BMAD bmad-create-epics-and-stories: эпики и сторис MVP Ф0 из PRD (FR-1..35) + spine (AD-1..30) в _bmad-output/planning-artifacts/ (или epics/).
+- **Следующий шаг:** bmad-create-epics-and-stories → bmad-sprint-planning → bmad-build (разработка Ф0: Rust-монорепа `pult/` по Structural Seed spine; ML-контур Ф1+ — отдельный Python-сервис вне ядра). Перед разработкой решить вопрос PRD 8.1 (глубина чтения Ozon) с владельцем.
 - **Правило работы:** вся проектная работа (проектирование, разработка, документация) ведётся по методологии BMAD: агенты/воркфлоу из `_bmad/`, артефакты в `_bmad-output/`, знания проекта в `docs/`. Волатильные факты (налоги, правила площадок, тарифы) — проверять веб-поиском и сверять с протоколом мониторинга гл. 5 эталона.

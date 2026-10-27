@@ -118,3 +118,23 @@ Stage Summary:
 - Ключевые решения: Python 3.14/FastAPI — один язык ядра; PG 18 = system of record, ClickHouse 26.8 LTS = только аналитика, RabbitMQ 4.4 quorum = события конвейера; РФ-хостинг (кандидат YC Cloud, 2 зоны), RPO 15 мин/RTO 4 ч; ноль LLM в Ф0.
 - Все три ревью (рубрик/тех-актуальность/adversary) в reviews/ — доказательная база решений; lint чист.
 - Следующий шаг: bmad-create-epics-and-stories (эпики/сторис Ф0 из PRD FR-1..35 + spine AD-1..27) → bmad-sprint-planning → bmad-build. Вопрос PRD 8.1 (глубина чтения Ozon) решить с владельцем до разработки адаптера.
+
+---
+Task ID: 7
+Agent: main (Z.ai)
+Task: Пересмотр стека по вопросам владельца: (1) Rust вместо Python (скорость/ресурсы/1000 одновременных), (2) масштабируемость и фронтенд-скорость, (3) консистентность Valkey vs Redis во всех документах разработки.
+
+Work Log:
+- Протокол начала сессии: MEMORY → worklog → git fetch/pull (origin/main актуален, HEAD ac32fb1).
+- Аудит grep по репозиторию: «Redis» фигурировал в живых правилах spine (AD-14, Conventions, deploy-диаграмма, Stack) — Valkey только примечанием в Stack/Deferred → ИИ-агент-разработчик взял бы Redis. PRD и эталон v1.2 привязок к языку/Redis не содержат (проверено).
+- Веб-верификация версий (Директива 1, 28.10.2026): crates.io API + GitHub releases + endoflife.date → Rust 1.99.1 (stable), Axum 0.8.9, Tokio 1.54.1, SQLx 0.9.0, Valkey 9.1.3 (release 26.10.2026; managed YC — линии 7.2–9.0-valkey).
+- ARCHITECTURE-SPINE.md пересмотрен: AD-20 переписан (Python 3.14/FastAPI → Rust stable + Tokio/Axum/SQLx; ML-контур Ф1+ — отдельный Python-сервис вне ядра; компромиссы зафиксированы честно); добавлен AD-28 (мандат «Valkey, НЕ Redis»: запрет Redis-образов CI-grep'ом, клиент redis-rs/valkey-glide допустим по RESP, сервер — всегда Valkey), AD-29 (модель ёмкости: stateless горизонт, WS-sharding + Valkey pub/sub, PgBouncer+реплика, autoscale воркеров по очередям, backpressure, k6-тест 1000 пользователей), AD-30 (бюджет производительности фронтенда: код-сплиттинг, <200 КБ gzip критический путь, TanStack Query+Virtual, WS-дельты, CWV-гейт в CI). Точечные правки: AD-14 (Redis→Valkey), AD-22 и Conventions (ports.py→ports.rs), Alembic→sqlx migrate, deploy-диаграмма (Valkey ×3), Stack (Valkey 9.1.x — НЕ Redis™), Deferred. Итог: 30 AD, статус final.
+- .memlog.md: 7 новых записей (version/decision/change/event), frontmatter updated.
+- MEMORY.md: снапшот обновлён (Task 7, стек-мандаты для всех агентов, следующая фаза — эпики).
+- Коммит + push вехи в origin/main.
+
+Stage Summary:
+- Стек ядра: Rust 1.99.x / Axum 0.8.9 / Tokio 1.54.1 / SQLx 0.9.0 + PG 18 / ClickHouse 26.8 LTS / RabbitMQ 4.4 / **Valkey 9.1 (НЕ Redis)** / React 19 + Vite 8.
+- Valkey зафиксирован мандатом AD-28 во всех слоях: живые правила spine (AD-14/22, конвенции, deploy, Stack, Deferred) + memlog + MEMORY — ИИ-агент-разработчик не сможет подставить Redis.
+- Масштабируемость 1000 одновременных и запрет фризов фронтенда — архитектурные инварианты (AD-29/AD-30), а не устные обещания.
+- Следующий шаг: bmad-create-epics-and-stories (эпики/сторис Ф0 из PRD FR-1..35 + spine AD-1..30).
