@@ -40,3 +40,21 @@ Stage Summary:
 - Постоянная память формализована в /home/z/my-project/MEMORY.md, читается первым действием в каждой новой сессии.
 - Механизм восстановления после сброса: worklog + git. Незавершённые шаги не теряются, завершённое не переделывается.
 - Ожидаемый следующий шаг: описание проекта пользователем → BMAD-фаза Planning.
+
+---
+Task ID: 3
+Agent: main (Z.ai)
+Task: Регистрация концепции «Пульт селлера» v1.2 и запуск BMAD-фазы Planning (создание Product Brief).
+
+Work Log:
+- Восстановление после сброса сессии: обнаружено исчезновение .claude/ и .agents/ (29+29 скиллов; не были закоммичены — паттерн `skills/` в .gitignore игнорировал подкаталоги на любой глубине). Исправлен .gitignore (`/skills/`), BMAD-скиллы восстановлены повторным запуском установщика, git config core.fileMode false (шум смены прав файлов). Коммит 1a79732.
+- Концепция пользователя зарегистрирована: upload/Pult_Seller_Etalonnaya_Koncepciya_v1_2.md → docs/Pult_Seller_Koncepciya_v1_2.md (проектное знание, BMAD project_knowledge).
+- Концепция прочитана полностью (17 глав): продукт «Пульт селлера» — операционная система селлера маркетплейсов (WB/Ozon/ЯМ), 4 канала (Б24 → amoCRM → retailCRM → standalone), 11 модулей ядра + пакеты M12/«Ассортимент», SLA «не теряем заказы», финмодель с налоговым радаром (НДС 22%, УСН-НДС 5/7%), ось ИИ-сотрудников «Автопилот» (6 ролей, L0–L4, action-bus, data-flywheel), 11 обязательных контрактов ТЗ MVP (5 v1.1 + 6 v1.2), монетизация 3 ноги (тарифы 2 990/5 990/14 900 ₽), гейты Ф0–Ф4, гейт С4, 38 рисков, комплаенс РФ+СНГ.
+- Установлен project_name = "Пульт селлера" (_bmad/custom/config.toml, team override).
+- BMAD-воркфлоу bmad-product-brief исполнен (headless create): workspace _bmad-output/planning-artifacts/briefs/brief-pult-seller-2026-10-27/ (run folder pattern из customize.toml), .memlog.md инициализирован (uv run memlog.py init), brief.md написан по шаблону assets/brief-template.md на русском (document_output_language=Russian), memlog-запись decision добавлена.
+- Разделы брифа: Executive Summary, Problem, Solution (11 модулей, SLA), Differentiation (7 слоёв канавы), Audience (4 кольца, периметр 15:0), Success Criteria (гейты Ф0–Ф4, North Star), Scope (MVP=Ф0, 11 контрактов, out-of-scope), Business Model, Constraints (комплаенс РФ/СНГ, красные линии), Vision (3 стадии доминирования), Sources (эталон v1.2).
+
+Stage Summary:
+- Зарегистрирован действующий эталон продукта: docs/Pult_Seller_Koncepciya_v1_2.md (единственный источник для проектирования/разработки/ТЗ).
+- Создан первый BMAD-артефакт планирования: brief.md (draft, ожидает подтверждения владельца) в _bmad-output/planning-artifacts/briefs/brief-pult-seller-2026-10-27/.
+- Следующие шаги BMAD-конвейера: bmad-prd (PRD из брифа+эталона) → bmad-architecture (архитектура из гл. 9) → bmad-ux (при необходимости) → bmad-create-epics-and-stories (эпики/сторис MVP Ф0) → bmad-sprint-planning → bmad-build.

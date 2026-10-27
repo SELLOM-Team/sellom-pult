@@ -9,3 +9,4 @@
 [core]
 communication_language = "Russian"
 document_output_language = "Russian"
+project_name = "Пульт селлера"
