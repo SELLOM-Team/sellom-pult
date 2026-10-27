@@ -97,3 +97,24 @@ Stage Summary:
 - PRD готов для нижестоящих фаз: архитектура (Winston) из PRD §4/§10/§13 + addendum A/B/C + эталон гл. 9; UX (Sally) из §2 UJ; эпики (John) из §4 FR/§6.
 - Открытые вопросы (7) зарегистрированы: глубина чтения Ozon (FBS vs FBO в канбане), SLA-механика пула Б24, формат виджета, демо-данные, пороги алертов, правила пула, WTP ИИ-ролей — большинство не блокируют архитектуру, но вопрос 8.1 требует решения владельца до разработки адаптера Ozon.
 - Следующий шаг: bmad-architecture (архитектура из гл. 9 эталона + addendum + PRD).
+
+---
+Task ID: 6
+Agent: main (Z.ai)
+Task: BMAD-воркфлоу bmad-architecture: создать Architecture Spine «Пульт селлера» (MVP Ф0) из PRD + addendum + эталона гл. 8/9, с верификацией стека вебом и ревьюерским гейтом.
+
+Work Log:
+- Воркфлоу bmad-architecture активирован по SKILL.md (fast-path): workspace _bmad-output/planning-artifacts/architecture/architecture-pult-seller-2026-10-27/ создан, memlog init (scope/purpose/altitude), шаблон assets/spine-template.md.
+- Точечное извлечение гл. 9 эталона субагентом (6-extract): 6 слоёв, 7 API-поверхностей, 7 доменов ядра, конвейер, PostgreSQL+ClickHouse+token-vault+REST/OAuth2 названы; язык/брокер/провайдер/DevOps — НЕ зафиксированы эталоном (открытые решения Winston).
+- Стек проверен вебом (Директива 1), 3 сессии WebSearch: Python 3.14.8 (позже скорректировано на 3.14.10), FastAPI 0.162.0 (PyPI 23.10.2026), PostgreSQL 18.6 (PG 19 — RC), ClickHouse 26.8 LTS (26.8.32.14, поддержка до 08.2027), Redis 8.8.3 (→8.8.4), RabbitMQ 4.4.0.
+- ARCHITECTURE-SPINE.md написан по шаблону: парадигма hexagonal (ports-and-adapters) + событийный конвейер; каталоги 6 слоёв; AD-1..AD-21 (11 контрактов [ADOPTED] + граница ядра, единственный вход, владение данными, идемпотентность, token-vault/PII, операционный конверт РФ/RPO 15/RTO 4, наблюдаемость, релизный конвейер 48ч/канарейки, один язык, LLM-периметр); конвенции (integer-копейки, UUIDv7, UTC/ISO-8601, error-конверт); Stack; Structural Seed (3 mermaid: поток конвейера, правило зависимостей, деплой); Capability→Architecture Map (все 35 FR); Deferred (10 позиций).
+- Линт lint_spine.py: 0 находок (до и после правок).
+- Ревьюерский гейт — 3 параллельных субагента (Task 6-review): (1) рубрик-волкер: 1 critical (владение «инцидент»/«задача») + 3 high (событийный конверт, бизнес-время, штамп витрины); (2) tech-currency: стек подтверждён, 1 high (YC managed ClickHouse нет 26.8 → self-host Ф0) + 4 medium (Python патч 3.14.10, SQLAlchemy 2.1.x/Alembic 1.20.x, YC Redis→Valkey, Vite 8.x); (3) adversary: 16 атак → 12 дыр, 2 critical (квоты vs «ноль тихих потерь», PII в ClickHouse-витринах) + 6 high.
+- Применены все critical/high: ужесточены AD-5 (SLA-инвариант главнее квот, счётчик-истина в PG), AD-14 (штамп {org, источник, fetched_at, built_at, cycle_id}; канбан читает PG), AD-15 (деривация ключей WB-поллинга), AD-16 (PII-манифест + CI-запрет PII в CH); добавлены AD-22 (канонические внутренние контракты + событийный конверт JSON), AD-23 (единая модель рабочих элементов, владелец core/rules), AD-24 (бизнес-время IANA), AD-25 (единственный владелец расчёта маржи, ROUND_HALF_UP), AD-26 (SLA-компенсация compensation_entitlement + биллинг-мост), AD-27 (изоляция демо-кабинета); Stack/Deferred скорректированы.
+- Spine финализирован: status=final, 27 AD, memlog 16 записей, frontmatter дополнен списком reviews/.
+
+Stage Summary:
+- Третий BMAD-артефакт: ARCHITECTURE-SPINE.md (status: final) — контракт согласованности для эпиков Ф0: парадигма, 27 AD (включая 11 обязательных контрактов эталона), конвенции, проверенный стек (27.10.2026), структурный сид (каталог pult/, 3 диаграммы), карта FR→компоненты→AD, Deferred.
+- Ключевые решения: Python 3.14/FastAPI — один язык ядра; PG 18 = system of record, ClickHouse 26.8 LTS = только аналитика, RabbitMQ 4.4 quorum = события конвейера; РФ-хостинг (кандидат YC Cloud, 2 зоны), RPO 15 мин/RTO 4 ч; ноль LLM в Ф0.
+- Все три ревью (рубрик/тех-актуальность/adversary) в reviews/ — доказательная база решений; lint чист.
+- Следующий шаг: bmad-create-epics-and-stories (эпики/сторис Ф0 из PRD FR-1..35 + spine AD-1..27) → bmad-sprint-planning → bmad-build. Вопрос PRD 8.1 (глубина чтения Ozon) решить с владельцем до разработки адаптера.
