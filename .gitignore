@@ -1,3 +1,4 @@
-skills/
+/skills/
 node_modules/
 bmad-install.log
+.env
