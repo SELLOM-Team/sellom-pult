@@ -9,3 +9,6 @@ target/
 
 # --- SPA build output (pult/shells/bitrix24/) ---
 pult/shells/bitrix24/dist/
+
+scriprs/
+scripts/review-*/
