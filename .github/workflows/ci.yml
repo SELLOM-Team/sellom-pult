@@ -338,6 +338,60 @@ jobs:
             sleep 2
           done
           echo "шлюз не достиг /health=200 + /ready=200 за 60 с"; exit 1
+      - name: "шаг 0 (e2e) — селлер: state → verdict → funnel, иммутабельность"
+        run: |
+          base='http://localhost:8080'
+          qs='DOMAIN=ci-shop.example&USER_ID=1'
+          # Первый вход: вопросник требуется.
+          code=$(curl -s -o /tmp/s0.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s0.json
+          # Ответ селлера → funnel.
+          code=$(curl -s -o /tmp/v0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"trade_model":"marketplace_seller","marketplaces":["wildberries","ozon"]}' \
+            "$base/v1/perimeter/verdict?$qs")
+          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v0.json && grep -q '"state":"funnel"' /tmp/v0.json
+          # Повторное открытие: вопросник не показывается (per-user запоминание).
+          code=$(curl -s -o /tmp/s1.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          [ "$code" = "200" ] && grep -q '"state":"funnel"' /tmp/s1.json
+          # Иммутабельность: повторный POST с ДРУГИМИ ответами возвращает сохранённый вердикт.
+          code=$(curl -s -o /tmp/v1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"trade_model":"services_other"}' \
+            "$base/v1/perimeter/verdict?$qs")
+          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v1.json
+          echo "селлер-поток шага 0 отработал (вопросник → funnel, вердикт иммутабелен)"
+      - name: "шаг 0 (e2e) — не-селлер: отказ и терминальный экран"
+        run: |
+          base='http://localhost:8080'
+          qs='DOMAIN=ci-other.example&USER_ID=7'
+          code=$(curl -s -o /tmp/s2.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s2.json
+          code=$(curl -s -o /tmp/v2.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"trade_model":"services_other"}' \
+            "$base/v1/perimeter/verdict?$qs")
+          [ "$code" = "200" ] && grep -q '"verdict":"non_seller"' /tmp/v2.json && grep -q '"state":"exit_screen"' /tmp/v2.json
+          code=$(curl -s -o /tmp/s3.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          [ "$code" = "200" ] && grep -q '"state":"exit_screen"' /tmp/s3.json
+          echo "не-селлер-поток отработал (честный отказ, воронка закрыта)"
+      - name: "шаг 0 (e2e) — валидация и метрика (знаменатель активации UJ-1)"
+        run: |
+          base='http://localhost:8080'
+          # Невалидная модель — 422 человекочитаемым конвертом, без касания БД.
+          code=$(curl -s -o /tmp/e0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"trade_model":"wholesale"}' "$base/v1/perimeter/verdict")
+          [ "$code" = "422" ] && grep -q '"code":"invalid_trade_model"' /tmp/e0.json
+          # Селлерская модель без площадок — 422.
+          code=$(curl -s -o /tmp/e1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"trade_model":"marketplace_planned","marketplaces":[]}' "$base/v1/perimeter/verdict")
+          [ "$code" = "422" ] && grep -q '"code":"marketplaces_required"' /tmp/e1.json
+          # Метрика: 2 установки (ci-shop + ci-other), обе прошли шаг 0, 1 селлер;
+          # dev-фоллбэк и sentinel-строка (b24_member_id IS NULL) не считаются.
+          code=$(curl -s -o /tmp/m0.json -w '%{http_code}' "$base/v1/metrics/perimeter")
+          [ "$code" = "200" ] \
+            && grep -q '"installs":2' /tmp/m0.json \
+            && grep -q '"step0_completed":2' /tmp/m0.json \
+            && grep -q '"sellers":1' /tmp/m0.json \
+            && grep -q '"step0_share":1.0' /tmp/m0.json
+          echo "валидация и метрика шага 0 отработали"
       - name: остановить шлюз
         if: always()
         run: |

@@ -32,4 +32,25 @@ describe('readPlacementContext — точка интеграции iframe-placem
   it('пустой PLACEMENT не считается embedded', () => {
     expect(readPlacementContext('?PLACEMENT=').embedded).toBe(false)
   })
+
+  // Story 1.2: identity-поля шага 0 (DOMAIN/USER_ID) — внешние ключи, не PII.
+  it('DOMAIN и USER_ID читаются из placement-query', () => {
+    const ctx = readPlacementContext('?PLACEMENT=DEFAULT&DOMAIN=shop.example&USER_ID=42')
+    expect(ctx.domain).toBe('shop.example')
+    expect(ctx.userId).toBe('42')
+  })
+
+  it('без DOMAIN/USER_ID поля не заданы — шлюз применит dev-фоллбэк', () => {
+    const ctx = readPlacementContext('?LANG=ru')
+    expect(ctx.domain).toBeUndefined()
+    expect(ctx.userId).toBeUndefined()
+  })
+
+  it('локальный dev-режим: контекст пуст, все identity-поля отсутствуют', () => {
+    const ctx = readPlacementContext('')
+    expect(ctx.embedded).toBe(false)
+    expect(ctx.domain).toBeUndefined()
+    expect(ctx.userId).toBeUndefined()
+    expect(ctx.placement).toBeUndefined()
+  })
 })

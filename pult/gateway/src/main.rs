@@ -1,11 +1,17 @@
 //! `pult-gateway` — REST-шлюз «Пульт селлера» (Axum 0.8.9, стек AD-20).
 //!
-//! Story 1.1 (Structural Seed): только проверяемый жизненный цикл —
-//! `/health` (проверка БД через sqlx-пул, 200/503 с версией приложения),
-//! `/ready` (готовность: миграции применены и БД отвечает) и forward-only
-//! миграции `sqlx::migrate!` из `db/migrations` на старте. Никакой
-//! бизнес-логики: адаптеры площадок, канбаны и авторизация Б24 — Stories 1.2+
-//! и Epic 2+.
+//! Story 1.1 (Structural Seed): проверяемый жизненный цикл — `/health`
+//! (проверка БД через sqlx-пул, 200/503 с версией приложения), `/ready`
+//! (готовность: миграции применены и БД отвечает) и forward-only миграции
+//! `sqlx::migrate!` из `db/migrations` на старте.
+//!
+//! Story 1.2: маршруты шага 0 онбординга (фильтр периметра «ваш бизнес»,
+//! FR-1) — модуль [`onboarding`] (`/v1/onboarding/state`,
+//! `/v1/perimeter/verdict`, `/v1/metrics/perimeter`). Семантика `/health` и
+//! `/ready` не меняется (проверено ревью 1.1). Дальнейшая бизнес-логика —
+//! Stories 1.3+ и Epic 2+.
+
+mod onboarding;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,6 +45,9 @@ struct AppState {
     version: &'static str,
     /// Флаг успешного применения миграций (виден в /ready).
     migrations_applied: Arc<AtomicBool>,
+    /// sqlx-стор домена identity: вердикты периметра шага 0 + upsert
+    /// org/user по placement-контексту (Story 1.2; порт PerimeterStore).
+    perimeter: onboarding::PgPerimeterStore,
 }
 
 /// Тело ответа /health и /ready.
@@ -183,13 +192,16 @@ async fn main() {
     let migrations_applied = Arc::new(AtomicBool::new(false));
     tokio::spawn(run_migrations(db.clone(), Arc::clone(&migrations_applied)));
 
+    let perimeter_store = onboarding::PgPerimeterStore::new(db.clone());
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .merge(onboarding::router())
         .with_state(AppState {
             db,
             version,
             migrations_applied,
+            perimeter: perimeter_store,
         });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.http_port));

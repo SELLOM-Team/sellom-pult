@@ -29,7 +29,9 @@ publish = false
 # добавляется вместе с обработкой SIGTERM, когда она появится.
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time"] }
 axum = "0.8.9"
-sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }
+# json (jsonb-колонка marketplaces) и uuid (ключи users/organizations) —
+# нужны шлюзу с Story 1.2 (шаг 0: рантайм-запросы, паттерн пробы /health).
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "json", "uuid"] }
 
 # --- общий язык доменов ---
 serde = { version = "1.0", features = ["derive"] }

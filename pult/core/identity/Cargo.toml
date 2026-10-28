@@ -6,3 +6,6 @@ publish.workspace = true
 
 [dependencies]
 pult-platform = { path = "../../platform" }
+# Только тип UUID для порта хранения вердиктов (периметр — Story 1.2);
+# serde/sqlx в чистом домене запрещены (AD-1: маппинг строк — в шлюзе).
+uuid = { workspace = true }

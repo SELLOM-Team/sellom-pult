@@ -51,6 +51,28 @@ curl -s localhost:8080/ready    # {"status":"ready",...,"migrations_applied":tru
 `/health` проверяет БД через sqlx-пул: 200 `ok` или 503 `degraded` (если БД
 недоступна — шлюз остаётся живым, миграции повторяются в фоне).
 
+## Шаг 0 — фильтр периметра «ваш бизнес» (Story 1.2)
+
+Контракты `/v1` (AD-13; ошибки — конверт `{error:{code,message,request_id,details}}`):
+
+| Метод и путь | Назначение |
+|--------------|-----------|
+| `GET /v1/onboarding/state?DOMAIN=…&USER_ID=…` | состояние шага 0: `step0_required` \| `funnel` \| `exit_screen`; идемпотентный upsert org+user по placement-контексту |
+| `POST /v1/perimeter/verdict?DOMAIN=…&USER_ID=…` | ответы шага 0 → иммутабельный вердикт `{verdict, state}` (повторный POST возвращает сохранённый) |
+| `GET /v1/metrics/perimeter` | доля установок, прошедших шаг 0: `{installs, step0_completed, sellers, step0_share}` |
+
+Тело POST: `{"trade_model": "marketplace_seller|marketplace_planned|own_channels_no_marketplaces|services_other", "marketplaces": ["wildberries", "ozon", "yandex_market"]}`
+(площадки обязательны для селлерских моделей; шаг 0 не собирает PII).
+
+Идентичность — только из placement-параметров Б24 (`DOMAIN`, `USER_ID`);
+без них — документированный dev-фоллбэк `dev-portal`/`dev-user`, исключаемый
+из метрик. Реальная проверка подписи/хендшейка — Story 1.3.
+
+Партнёрский слот исходящего экрана не-селлера (сборка SPA): переменные
+`VITE_PARTNER_TITLE` / `VITE_PARTNER_URL` (только http/https; дефолт —
+каталог партнёров Битрикс24.Маркет). Конкретного партнёра выбирает владелец
+при публикации (критерий рев-шер ≥ 30%).
+
 ## SPA (оболочка Битрикс24)
 
 ```bash

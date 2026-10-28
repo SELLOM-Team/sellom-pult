@@ -10,10 +10,13 @@ path = "src/main.rs"
 
 [dependencies]
 pult-platform = { path = "../platform" }
+# Чистый домен правил вердикта шага 0 (Story 1.2, AD-1): шлюз — композиция.
+pult-core-identity = { path = "../core/identity" }
 axum = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -1021,6 +1021,7 @@ name = "pult-core-identity"
 version = "0.1.0"
 dependencies = [
  "pult-platform",
+ "uuid",
 ]
 
 [[package]]
@@ -1049,6 +1050,7 @@ name = "pult-gateway"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "pult-core-identity",
  "pult-platform",
  "serde",
  "serde_json",
@@ -1056,6 +1058,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1387,6 +1390,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
  "webpki-roots",
 ]
 
@@ -1453,6 +1457,7 @@ dependencies = [
  "sqlx-core",
  "thiserror",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1487,6 +1492,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -1512,6 +1518,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

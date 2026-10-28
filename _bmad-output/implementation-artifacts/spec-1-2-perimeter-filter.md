@@ -64,18 +64,18 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `pult/db/migrations/0005_perimeter_verdicts.sql` — таблица perimeter_verdicts (id uuid pk; organization_id+user_id c составным FK → users(organization_id,id) ON DELETE CASCADE; trade_model text NOT NULL; marketplaces jsonb NOT NULL DEFAULT '[]'; verdict text NOT NULL CHECK IN ('seller','non_seller'); created_at timestamptz DEFAULT now(); UNIQUE(user_id)) + ALTER organizations ADD b24_member_id text UNIQUE — ключ реестра установок
-- [ ] `pult/core/identity/src/perimeter.rs` — TradeModel (4 варианта), Verdict (Seller/NonSeller), decide_verdict (marketplace_seller|marketplace_planned → Seller; own_channels_no_marketplaces|services_other → NonSeller), PerimeterAnswers; юнит-тесты всех правил
-- [ ] `pult/core/identity/src/ports.rs` — трейт PerimeterStore (load_verdict/save_verdict) рядом с IdentityPort
-- [ ] `pult/core/identity/src/lib.rs` — pub mod perimeter + актуализация доко домена
-- [ ] `pult/gateway/src/onboarding.rs` — router `/v1/onboarding/state`, `/v1/perimeter/verdict`, `/v1/metrics/perimeter`; upsert org/user по placement-контексту (dev-фоллбэк); sqlx-стор PerimeterStore; строковый маппинг ↔ enum с тестами; идемпотентность через UNIQUE(user_id) ON CONFLICT
-- [ ] `pult/gateway/src/main.rs` — подключение router, расширение AppState
-- [ ] `pult/shells/bitrix24/src/b24.ts` + `b24.test.ts` — контекст расширяется полями DOMAIN/USER_ID (парсинг, без PII)
-- [ ] `pult/shells/bitrix24/src/api.ts` + `api.test.ts` (новые) — клиент state/verdict/metrics: JSON-семантика ответов (как health.ts), error-конверт-парсинг
-- [ ] `pult/shells/bitrix24/src/screens/Questionnaire.tsx`, `screens/ExitScreen.tsx` (новые) — шаг 0 (2 вопроса, honest-копирайт, скелетоны) и исходящий экран (честный отказ, периметр, рекомендация партнёрского решения — контент-слот VITE_PARTNER_* с честным дефолтом «каталог партнёров Битрикс24.Маркет», приглашение вернуться)
-- [ ] `pult/shells/bitrix24/src/App.tsx` + `appState.test.ts` — чистая функция screenForState (step0_required→Questionnaire, funnel→существующий экран, exit_screen→ExitScreen, ошибки/офлайн→честная заглушка); App-роутинг на ней
-- [ ] `pult/README.md` — эндпоинты шага 0, переменные VITE_PARTNER_*, поведение dev-фоллбэка
-- [ ] `.github/workflows/ci.yml` — integration: end-to-end шага 0 (state→step0_required; verdict seller→funnel; повторный POST идемпотентен; verdict non_seller→exit_screen; метрика считает; dev-фоллбэк в метрику не входит)
+- [x] `pult/db/migrations/0005_perimeter_verdicts.sql` — таблица perimeter_verdicts (id uuid pk; organization_id+user_id c составным FK → users(organization_id,id) ON DELETE CASCADE; trade_model text NOT NULL; marketplaces jsonb NOT NULL DEFAULT '[]'; verdict text NOT NULL CHECK IN ('seller','non_seller'); created_at timestamptz DEFAULT now(); UNIQUE(user_id)) + ALTER organizations ADD b24_member_id text UNIQUE — ключ реестра установок
+- [x] `pult/core/identity/src/perimeter.rs` — TradeModel (4 варианта), Verdict (Seller/NonSeller), decide_verdict (marketplace_seller|marketplace_planned → Seller; own_channels_no_marketplaces|services_other → NonSeller), PerimeterAnswers; юнит-тесты всех правил
+- [x] `pult/core/identity/src/ports.rs` — трейт PerimeterStore (load_verdict/save_verdict) рядом с IdentityPort
+- [x] `pult/core/identity/src/lib.rs` — pub mod perimeter + актуализация доко домена
+- [x] `pult/gateway/src/onboarding.rs` — router `/v1/onboarding/state`, `/v1/perimeter/verdict`, `/v1/metrics/perimeter`; upsert org/user по placement-контексту (dev-фоллбэк); sqlx-стор PerimeterStore; строковый маппинг ↔ enum с тестами; идемпотентность через UNIQUE(user_id) ON CONFLICT
+- [x] `pult/gateway/src/main.rs` — подключение router, расширение AppState
+- [x] `pult/shells/bitrix24/src/b24.ts` + `b24.test.ts` — контекст расширяется полями DOMAIN/USER_ID (парсинг, без PII)
+- [x] `pult/shells/bitrix24/src/api.ts` + `api.test.ts` (новые) — клиент state/verdict/metrics: JSON-семантика ответов (как health.ts), error-конверт-парсинг
+- [x] `pult/shells/bitrix24/src/screens/Questionnaire.tsx`, `screens/ExitScreen.tsx` (новые) — шаг 0 (2 вопроса, honest-копирайт, скелетоны) и исходящий экран (честный отказ, периметр, рекомендация партнёрского решения — контент-слот VITE_PARTNER_* с честным дефолтом «каталог партнёров Битрикс24.Маркет», приглашение вернуться)
+- [x] `pult/shells/bitrix24/src/App.tsx` + `appState.test.ts` — чистая функция screenForState (step0_required→Questionnaire, funnel→существующий экран, exit_screen→ExitScreen, ошибки/офлайн→честная заглушка); App-роутинг на ней
+- [x] `pult/README.md` — эндпоинты шага 0, переменные VITE_PARTNER_*, поведение dev-фоллбэка
+- [x] `.github/workflows/ci.yml` — integration: end-to-end шага 0 (state→step0_required; verdict seller→funnel; повторный POST идемпотентен; verdict non_seller→exit_screen; метрика считает; dev-фоллбэк в метрику не входит)
 
 **Acceptance Criteria:**
 - Given первый вход с placement-контекстом, when GET /v1/onboarding/state, then создаются org+user и возвращается `step0_required` (вопросник показывается).
@@ -86,6 +86,12 @@ context:
 - Given CI integration-джоба, when стек поднят, then шаг 0 прогоняется end-to-end и все ассерты зелены; гейты fmt/clippy/test, hexagonal-lint, valkey-grep, bundle-size (<200 КБ gzip) зелены.
 
 ## Implementation Notes
+
+- 2026-10-28, оркестратор + dev-субагент: реализация по спеке (субагент прерван по таймауту сессии после ~90% работы — код/тесты/SPA готовы; оркестратор дозакрыл README-секцию шага 0 и CI-шаги e2e, YAML-ловушка «: » в именах шагов закавычена). Проверка «битых скобок» в выводе — python-строка (`[m`-глотание вывода подтверждено артефактом, не дефектом кода; урок Task 11-12 применим).
+- pult/Cargo.toml: sqlx +features json,uuid (jsonb marketplaces и ключи users/organizations в рантайм-запросах шлюза); gateway +uuid; core/identity +uuid (только тип для порта) — serde/sqlx в домен НЕ добавлены.
+- SPA: существующий экран «Начните подключение» извлечён в screens/StartConnection.tsx (без изменения семантики /health-статуса — health.ts переиспользован); App.tsx — роутинг через чистую screenForState; Vite-прокси расширен на /v1; vite-env.d.ts типизирует VITE_PARTNER_*.
+- Тесты: 51 Rust (identity 5 perimeter + gateway 26 [21 новых onboarding] + platform 20) + 44 SPA (api 20 / appState 12 [включая partnerSlot] / b24 7 / health 5) — все зелены локально; гейты hexagonal/valkey/bundle PASS (72 318 Б gzip < 200 000); живая деградация: /v1 → 503 database_unavailable-конверт, 422-валидация работает без БД, /health не тронут.
+- CI integration: +3 шага e2e шага 0 (селлер: state→verdict→funnel→иммутабельность; не-селлер: exit_screen; валидация 422 + метрика installs=2/completed=2/sellers=1/share=1.0 — dev-фоллбэк и sentinel-строка b24_member_id NULL не считаются). Прогон — на push (внешняя верификация).
 
 ## Spec Change Log
 

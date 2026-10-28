@@ -1,0 +1,71 @@
+import { useEffect, useState } from 'react'
+import { ConnectionStatus, type ConnectionPhase } from '../ConnectionStatus'
+import { Skeleton } from '../components/Skeleton'
+import { phaseFromHealthResponse } from '../health'
+import type { B24PlacementContext } from '../b24'
+
+/**
+ * Экран воронки «Начните подключение» (Story 1.1 — существующий экран;
+ * Story 1.2: сюда попадает селлер, прошедший фильтр периметра).
+ *
+ * Честность UI (контракт эпика): осмысленное пустое состояние вместо
+ * бутафорского CTA — мастер подключения площадок появится в Story 1.3,
+ * статус подключения — честная заглушка.
+ */
+export function StartConnection({ placement }: { placement: B24PlacementContext }) {
+  const [phase, setPhase] = useState<ConnectionPhase>('checking')
+
+  useEffect(() => {
+    let cancelled = false
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 1500)
+
+    // Dev-удобство: пробуем /health шлюза через Vite-прокси (→ localhost:8080).
+    // Честная семантика (health.ts): только JSON-ответ шлюза считается ответом
+    // шлюза — 200+JSON → жив; 503+JSON → жив, но БД degraded; всё прочее
+    // (в т.ч. HTML-фоллбек статик-хостинга с кодом 200) → шлюза нет.
+    fetch('/health', { signal: controller.signal })
+      .then((res) => {
+        if (cancelled) return
+        setPhase(phaseFromHealthResponse(res.status, res.headers.get('content-type')))
+      })
+      .catch(() => {
+        if (!cancelled) setPhase('offline')
+      })
+      .finally(() => clearTimeout(timeout))
+
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearTimeout(timeout)
+    }
+  }, [])
+
+  return (
+    <section className="card" aria-labelledby="onboarding-title">
+      <h1 id="onboarding-title">Начните подключение</h1>
+      <p className="card__lead">
+        Здесь появится пошаговое подключение вашего кабинета маркетплейса:
+        фильтр «ваш бизнес» пройден, дальше — площадки, первичный синк истории
+        с видимым прогрессом и первый живой канбан.
+      </p>
+
+      {phase === 'checking' ? <Skeleton lines={3} /> : <ConnectionStatus phase={phase} />}
+
+      <dl className="context">
+        <dt>Режим открытия</dt>
+        <dd>
+          {placement.embedded
+            ? `iframe-placement Битрикс24${placement.placement ? ` (${placement.placement})` : ''}`
+            : 'локальный dev-режим — после установки приложение откроется внутри Битрикс24'}
+        </dd>
+        {placement.lang && (
+          <>
+            <dt>Язык портала Б24</dt>
+            <dd>{placement.lang}</dd>
+          </>
+        )}
+      </dl>
+    </section>
+  )
+}

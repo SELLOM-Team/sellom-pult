@@ -1,4 +1,4 @@
-/* Каркас SPA «Пульт селлера» (Story 1.1) — минимальный CSS без зависимостей. */
+/* Каркас SPA «Пульт селлера» (Story 1.1 — каркас, 1.2 — шаг 0) — минимальный CSS без зависимостей. */
 
 :root {
   color-scheme: light;
@@ -174,4 +174,94 @@ body {
   .skeleton__line {
     animation: none;
   }
+}
+
+/* Шаг 0 — вопросник периметра (Story 1.2). */
+.q-group {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.q-group__legend {
+  padding: 0;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.q-group[disabled] .q-option {
+  opacity: 0.6;
+}
+
+.q-option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.q-option--checked {
+  border-color: var(--accent);
+  background: #f2f6ff;
+}
+
+.q-option input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.q-option__hint {
+  display: block;
+  font-style: normal;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.form-error {
+  margin: 0;
+  color: #b3261e;
+  font-size: 14px;
+}
+
+.card__action {
+  align-self: flex-start;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 10px 18px;
+  cursor: pointer;
+}
+
+.card__action:disabled {
+  background: var(--off);
+  cursor: default;
+}
+
+/* Исходящий экран не-селлера: слот партнёрской рекомендации (Story 1.2). */
+.partner {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fafbfd;
+}
+
+.partner p {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--ink-muted);
+}
+
+.partner a {
+  color: var(--accent);
+  font-weight: 600;
 }

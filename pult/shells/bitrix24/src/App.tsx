@@ -1,45 +1,47 @@
 import { useEffect, useState } from 'react'
-import { ConnectionStatus, type ConnectionPhase } from './ConnectionStatus'
-import { Skeleton } from './components/Skeleton'
 import { readPlacementContext } from './b24'
-import { phaseFromHealthResponse } from './health'
+import { ApiError, fetchOnboardingState } from './api'
+import { screenForState, type ScreenState } from './appState'
+import { Skeleton } from './components/Skeleton'
+import { Questionnaire } from './screens/Questionnaire'
+import { StartConnection } from './screens/StartConnection'
+import { ExitScreen } from './screens/ExitScreen'
 
 /**
- * Экран входа каркаса: «Начните подключение» (Story 1.1).
+ * Оболочка Б24 (Story 1.2): роутинг по состоянию шага 0 онбординга.
  *
- * Честность UI (контракт эпика): осмысленное пустое состояние вместо
- * бутафорского CTA — подключение площадок и фильтр периметра появятся
- * в Stories 1.2–1.4, статус подключения — честная заглушка.
+ * Чистая функция {@link screenForState} решает, какой экран показывать:
+ * step0_required → вопросник «ваш бизнес», funnel → существующий экран
+ * «Начните подключение», exit_screen → исходящий экран не-селлера,
+ * ошибки/офлайн → честная заглушка. Идентичность — только placement-контекст
+ * (NFR-6): без него шлюз применяет документированный dev-фоллбэк.
  */
 export default function App() {
   const placement = readPlacementContext()
-  const [phase, setPhase] = useState<ConnectionPhase>('checking')
+  const [screenState, setScreenState] = useState<ScreenState>({ kind: 'loading' })
 
   useEffect(() => {
     let cancelled = false
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 1500)
-
-    // Dev-удобство: пробуем /health шлюза через Vite-прокси (→ localhost:8080).
-    // Честная семантика (health.ts): только JSON-ответ шлюза считается ответом
-    // шлюза — 200+JSON → жив; 503+JSON → жив, но БД degraded; всё прочее
-    // (в т.ч. HTML-фоллбек статик-хостинга с кодом 200) → шлюза нет.
-    fetch('/health', { signal: controller.signal })
-      .then((res) => {
+    fetchOnboardingState(placement)
+      .then((state) => {
+        if (!cancelled) setScreenState({ kind: 'resolved', state })
+      })
+      .catch((err: unknown) => {
         if (cancelled) return
-        setPhase(phaseFromHealthResponse(res.status, res.headers.get('content-type')))
+        if (err instanceof ApiError && err.code !== 'network_error' && err.code !== 'invalid_response') {
+          // Шлюз ответил ошибкой-конвертом (например, 503 database_unavailable).
+          setScreenState({ kind: 'error', code: err.code, message: err.message })
+        } else {
+          // Сеть/не-JSON: шлюза нет — честный офлайн-статус.
+          setScreenState({ kind: 'offline' })
+        }
       })
-      .catch(() => {
-        if (!cancelled) setPhase('offline')
-      })
-      .finally(() => clearTimeout(timeout))
-
     return () => {
       cancelled = true
-      controller.abort()
-      clearTimeout(timeout)
     }
   }, [])
+
+  const screen = screenForState(screenState)
 
   return (
     <main className="screen">
@@ -48,39 +50,45 @@ export default function App() {
         <span className="brand-note">операционная система селлера маркетплейсов</span>
       </header>
 
-      <section className="card" aria-labelledby="onboarding-title">
-        <h1 id="onboarding-title">Начните подключение</h1>
-        <p className="card__lead">
-          Здесь появится пошаговое подключение вашего кабинета маркетплейса:
-          фильтр «ваш бизнес», площадки, первичный синк истории с видимым
-          прогрессом и первый живой канбан.
-        </p>
-
-        {phase === 'checking' ? (
+      {screen === 'skeleton' && (
+        <section className="card" aria-busy="true" aria-labelledby="loading-title">
+          <h1 id="loading-title">Определяем ваш шаг онбординга</h1>
           <Skeleton lines={3} />
-        ) : (
-          <ConnectionStatus phase={phase} />
-        )}
+        </section>
+      )}
 
-        <dl className="context">
-          <dt>Режим открытия</dt>
-          <dd>
-            {placement.embedded
-              ? `iframe-placement Битрикс24${placement.placement ? ` (${placement.placement})` : ''}`
-              : 'локальный dev-режим — после установки приложение откроется внутри Битрикс24'}
-          </dd>
-          {placement.lang && (
-            <>
-              <dt>Язык портала Б24</dt>
-              <dd>{placement.lang}</dd>
-            </>
-          )}
-        </dl>
-      </section>
+      {screen === 'questionnaire' && (
+        <Questionnaire
+          ctx={placement}
+          onResolved={(state) => setScreenState({ kind: 'resolved', state })}
+        />
+      )}
+
+      {screen === 'funnel' && <StartConnection placement={placement} />}
+
+      {screen === 'exit' && <ExitScreen />}
+
+      {screen === 'unavailable' && <Unavailable state={screenState} />}
 
       <footer className="screen__footer">
         Вход и роли — только через контур Битрикс24, отдельных паролей нет.
       </footer>
     </main>
+  )
+}
+
+/** Честная заглушка: шлюз недоступен или ответил ошибкой — без бутафории. */
+function Unavailable({ state }: { state: ScreenState }) {
+  const offline = state.kind === 'offline'
+  const error = state.kind === 'error' ? state : null
+  return (
+    <section className="card" aria-labelledby="unavailable-title">
+      <h1 id="unavailable-title">Онбординг сейчас недоступен</h1>
+      <p className="card__lead">
+        {offline
+          ? 'Шлюз не отвечает из этого окружения — это честный статус. Фильтр «ваш бизнес» откроется, когда шлюз поднят (локально: dev-стек + pult-gateway).'
+          : `Шлюз ответил ошибкой: ${error?.message ?? 'неизвестная ошибка'} (код: ${error?.code ?? 'unknown'}). Повторите попытку позже.`}
+      </p>
+    </section>
   )
 }
