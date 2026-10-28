@@ -21,7 +21,7 @@ const LABELS: Record<Exclude<ConnectionPhase, 'checking'>, { title: string; deta
   'gateway-up': {
     title: 'Шлюз запущен — каркас готов',
     detail:
-      'Подключение кабинета появится в следующих сборках: фильтр «ваш бизнес» и мастер площадок (Stories 1.2–1.3).',
+      'Мастер подключения площадок появится в следующей сборке (Story 1.3): токены WB и Ozon с автотестом прав.',
   },
   'gateway-degraded': {
     title: 'Шлюз запущен, но база недоступна',

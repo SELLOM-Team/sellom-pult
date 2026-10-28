@@ -116,17 +116,28 @@ function parsePerimeterMetrics(body: unknown): PerimeterMetrics {
 }
 
 /**
- * Выполняет запрос к шлюзу и возвращает разобранное JSON-тело успешного
- * ответа. Любая ошибка — ApiError: network_error (шлюз недоступен),
+ * Выполняет запрос к шлюзу с бюджетом времени и возвращает разобранное
+ * JSON-тело успешного ответа. Таймаут обязателен (ревью Story 1.2):
+ * зависший шлюз — это офлайн, а не вечный скелетон. Любая ошибка —
+ * ApiError: network_error (нет сети/сервера/просрочен бюджет),
  * invalid_response (не-JSON/битый JSON/ошибка без конверта) либо код
  * error-конверта шлюза (например, database_unavailable при 503).
  */
+const REQUEST_TIMEOUT_MS = 8000
+
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   let response: Response
   try {
-    response = await fetch(url, init)
+    response = await fetch(url, { ...init, signal: controller.signal })
   } catch {
-    throw new ApiError('network_error', 'шлюз недоступен: сеть или сервер не отвечает')
+    throw new ApiError(
+      'network_error',
+      'шлюз недоступен: сеть или сервер не отвечает (или превысен бюджет запроса)',
+    )
+  } finally {
+    clearTimeout(timer)
   }
   const contentType = response.headers.get('content-type') ?? ''
   if (!contentType.toLowerCase().includes('json')) {

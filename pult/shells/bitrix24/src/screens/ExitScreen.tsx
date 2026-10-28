@@ -19,8 +19,19 @@ export function partnerSlot(env: PartnerEnv = import.meta.env): {
 } {
   const title = env.VITE_PARTNER_TITLE?.trim() || DEFAULT_PARTNER_TITLE
   const rawUrl = env.VITE_PARTNER_URL?.trim()
-  const url =
-    rawUrl !== undefined && /^https?:\/\//i.test(rawUrl) ? rawUrl : DEFAULT_PARTNER_URL
+  // Полный URL-парсинг (ревью Story 1.2): голая схема «https://» или хвост
+  // без хоста — не ссылка; тихие подмены запрещены, только честный дефолт.
+  let url = DEFAULT_PARTNER_URL
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl)
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname) {
+        url = rawUrl
+      }
+    } catch {
+      // битая строка — дефолт
+    }
+  }
   return { title, url }
 }
 
@@ -48,8 +59,8 @@ export function ExitScreen() {
       </div>
       <p className="card__lead">
         Если ваш бизнес изменится и вы начнёте торговать на маркетплейсах —
-        возвращайтесь: ваш ответ сохранён и вопросник не повторится, а когда
-        периметр продукта расширится, вход в онбординг откроется.
+        возвращайтесь и напишите нам: поддержка пересмотрит вход в онбординг.
+        Ваш сегодняшний ответ сохранён и помогает делать продукт лучше.
       </p>
     </section>
   )

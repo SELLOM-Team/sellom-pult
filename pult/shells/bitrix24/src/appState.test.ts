@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { screenForState, type ScreenState } from './appState'
+import { screenForState, screenStateFromError, type ScreenState } from './appState'
+import { ApiError } from './api'
 import { partnerSlot } from './screens/ExitScreen'
 
 // Чистая функция роутинга App (Story 1.2): мапа состояния шага 0 → экран.
@@ -26,6 +27,38 @@ describe('screenForState — мапа состояния онбординга �
     expect(screenForState({ kind: 'resolved', state: 'funnel' })).not.toBe('questionnaire')
     expect(screenForState({ kind: 'resolved', state: 'exit_screen' })).not.toBe('questionnaire')
     expect(screenForState({ kind: 'resolved', state: 'exit_screen' })).not.toBe('funnel')
+  })
+})
+
+// Классификация ошибки опроса шлюза (ревью Story 1.2: инверсия веток в App
+// больше не проходит мимо тестов — шлюз-жив-но-ошибся ≠ шлюза-нет).
+describe('screenStateFromError — конверт шлюза ≠ офлайн', () => {
+  it('ошибка-конверт шлюза (например 503 database_unavailable) → kind: error', () => {
+    const state = screenStateFromError(
+      new ApiError('database_unavailable', 'База данных недоступна', 503),
+    )
+    expect(state).toEqual({
+      kind: 'error',
+      code: 'database_unavailable',
+      message: 'База данных недоступна',
+    })
+  })
+
+  it('network_error → офлайн (шлюза нет в этом окружении)', () => {
+    expect(screenStateFromError(new ApiError('network_error', 'нет сети'))).toEqual({
+      kind: 'offline',
+    })
+  })
+
+  it('invalid_response (HTML-фоллбек/битый JSON) → офлайн', () => {
+    expect(screenStateFromError(new ApiError('invalid_response', 'не JSON', 200))).toEqual({
+      kind: 'offline',
+    })
+  })
+
+  it('не-ApiError (любой другой throw) → офлайн, без падения', () => {
+    expect(screenStateFromError(new Error('что-то другое'))).toEqual({ kind: 'offline' })
+    expect(screenStateFromError('строка')).toEqual({ kind: 'offline' })
   })
 })
 
@@ -66,5 +99,17 @@ describe('partnerSlot — слот VITE_PARTNER_*', () => {
     expect(partnerSlot({ VITE_PARTNER_TITLE: 'Партнёр Y', VITE_PARTNER_URL: 'ftp://x' })).toEqual(
       { title: 'Партнёр Y', url: 'https://www.bitrix24.ru/apps/' },
     )
+  })
+
+  it('голая схема «https://» без хоста — не ссылка: дефолт (ревью 1.2)', () => {
+    // new URL('https://') бросает ERR_INVALID_URL — парсинг, а не префикс-regex.
+    expect(partnerSlot({ VITE_PARTNER_URL: 'https://' })).toEqual({
+      title: 'Каталог партнёров Битрикс24.Маркет',
+      url: 'https://www.bitrix24.ru/apps/',
+    })
+    expect(partnerSlot({ VITE_PARTNER_URL: 'совсем не url' })).toEqual({
+      title: 'Каталог партнёров Битрикс24.Маркет',
+      url: 'https://www.bitrix24.ru/apps/',
+    })
   })
 })

@@ -197,6 +197,10 @@ async fn main() {
         .route("/health", get(health))
         .route("/ready", get(ready))
         .merge(onboarding::router())
+        // Договор об ошибках: любой маршрут отвечает конвертом — и 404/405 тоже
+        // (ревью Story 1.2: пустые дефолты axum обходят контракты /v1).
+        .fallback(onboarding::not_found)
+        .method_not_allowed_fallback(onboarding::method_not_allowed)
         .with_state(AppState {
             db,
             version,

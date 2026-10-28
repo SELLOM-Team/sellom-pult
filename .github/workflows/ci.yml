@@ -283,6 +283,11 @@ jobs:
           curl -s -o /tmp/ready.json -w '%{http_code}' http://localhost:8080/ready > /tmp/ready.code || true
           ready_code=$(cat /tmp/ready.code 2>/dev/null || true)
           echo "/ready → $ready_code $(cat /tmp/ready.json 2>/dev/null || true)"
+          # /v1 в деградации (ревью 1.2): валидация работает без БД (422 до
+          # касания БД), состояние — честный 503-конверт, не пустой ответ.
+          v1_code=$(curl -s -o /tmp/v1-deg.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"trade_model":"wholesale"}' http://localhost:8080/v1/perimeter/verdict || true)
+          state_code=$(curl -s -o /tmp/v1-state.json -w '%{http_code}' http://localhost:8080/v1/onboarding/state || true)
           # БД возвращается в стек ДО ассертов: провал ассерта (bash -e) не должен
           # обрывать шаг раньше восстановления окружения.
           docker compose -f pult/deploy/docker-compose.yml start postgres
@@ -290,6 +295,8 @@ jobs:
           [ "$ready_code" = "503" ]
           grep -q '"status":"not_ready"' /tmp/ready.json
           grep -q '"migrations_applied":true' /tmp/ready.json
+          [ "$v1_code" = "422" ] && grep -q '"code":"invalid_trade_model"' /tmp/v1-deg.json
+          [ "$state_code" = "503" ] && grep -q '"code":"database_unavailable"' /tmp/v1-state.json
       - name: БД восстановилась → /health снова 200 ok
         run: |
           for i in $(seq 1 30); do
@@ -312,12 +319,12 @@ jobs:
             psql -U pult -d pult -tAc \
             "SELECT count(*) FROM organizations WHERE name = 'ci-sentinel-survives-reup'" \
             | grep -qx '1'
-      - name: psql — ровно 4 таблицы Story 1.1 существуют
+      - name: psql — 5 таблиц (Story 1.1 + шаг 0) существуют
         run: |
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -tAc \
-            "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('organizations','users','role_assignments','portal_settings')" \
-            | grep -qx '4'
+            "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('organizations','users','role_assignments','portal_settings','perimeter_verdicts')" \
+            | grep -qx '5'
       - name: повторный запуск шлюза — миграции no-op, /ready → ready (идемпотентность)
         working-directory: pult
         run: |
@@ -383,15 +390,19 @@ jobs:
           code=$(curl -s -o /tmp/e1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"marketplace_planned","marketplaces":[]}' "$base/v1/perimeter/verdict")
           [ "$code" = "422" ] && grep -q '"code":"marketplaces_required"' /tmp/e1.json
-          # Метрика: 2 установки (ci-shop + ci-other), обе прошли шаг 0, 1 селлер;
-          # dev-фоллбэк и sentinel-строка (b24_member_id IS NULL) не считаются.
+          # Метрика: 2 установки (ci-shop + ci-other), обе прошли шаг 0, 1 селлер.
+          # dev-фоллбэк реально создаётся запросом без placement-параметров и
+          # НЕ меняет счётчики (исключение фиксируется этим же ассертом);
+          # sentinel-строка (b24_member_id IS NULL) тоже не считается.
+          # grep-якоря «значение,» отсекают ложные совпадения префиксом.
+          curl -s -o /dev/null "$base/v1/onboarding/state"
           code=$(curl -s -o /tmp/m0.json -w '%{http_code}' "$base/v1/metrics/perimeter")
           [ "$code" = "200" ] \
-            && grep -q '"installs":2' /tmp/m0.json \
-            && grep -q '"step0_completed":2' /tmp/m0.json \
-            && grep -q '"sellers":1' /tmp/m0.json \
-            && grep -q '"step0_share":1.0' /tmp/m0.json
-          echo "валидация и метрика шага 0 отработали"
+            && grep -q '"installs":2,' /tmp/m0.json \
+            && grep -q '"step0_completed":2,' /tmp/m0.json \
+            && grep -q '"sellers":1,' /tmp/m0.json \
+            && grep -q '"step0_share":1.0}' /tmp/m0.json
+          echo "валидация и метрика шага 0 отработали (dev-фоллбэк исключён)"
       - name: остановить шлюз
         if: always()
         run: |

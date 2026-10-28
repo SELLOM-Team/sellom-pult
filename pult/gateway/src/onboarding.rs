@@ -18,6 +18,8 @@
 //! `dev-portal`/`dev-user`, исключаемый из метрик.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
@@ -35,6 +37,14 @@ use pult_core_identity::ports::PerimeterStore;
 use pult_platform::error::ErrorEnvelope;
 
 use crate::AppState;
+
+/// Бюджет любого обращения к БД в /v1-хендлерах (паттерн /health: запрос,
+/// не уложившийся в бюджет, — «БД недоступна», а не зависший запрос).
+const STORE_BUDGET: Duration = Duration::from_secs(5);
+
+/// Закрытый список площадок шага 0 (контракт Ф0: WB/Ozon/ЯМ) — свободный
+/// текст в jsonb не попадает (ревью Story 1.2: валидация закрытым списком).
+const ALLOWED_MARKETPLACES: [&str; 3] = ["wildberries", "ozon", "yandex_market"];
 
 /// member_id dev-фоллбэка: организация-фикстура, исключается из метрик
 /// (не «установка», а документированный dev-режим без placement-параметров).
@@ -56,9 +66,21 @@ struct PlacementIdentity {
     pub user_ref: String,
 }
 
+/// Ошибка распознавания placement-контекста.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlacementIdentityError {
+    /// DOMAIN коллизирует с зарезервированным dev-идентификатором —
+    /// реальный портал не должен молча сливаться с dev-фикстурой.
+    ReservedDomain,
+}
+
 impl PlacementIdentity {
     /// Читает placement-контекст из query-параметров запроса.
-    fn from_params(params: &HashMap<String, String>) -> Self {
+    ///
+    /// DOMAIN канонизируется в нижний регистр (варианты регистра не должны
+    /// плодить дубликаты организаций в реестре установок); литерал
+    /// dev-портала в явном DOMAIN — отказ (422 `reserved_member_id`).
+    fn from_params(params: &HashMap<String, String>) -> Result<Self, PlacementIdentityError> {
         let domain = params.get("DOMAIN").map(|v| v.trim()).unwrap_or_default();
         let user = params.get("USER_ID").map(|v| v.trim()).unwrap_or_default();
         let placement = params
@@ -70,17 +92,20 @@ impl PlacementIdentity {
                 placement,
                 "placement-контекст неполный или отсутствует — dev-фоллбэк (в метрики не попадёт)"
             );
-            Self {
+            return Ok(Self {
                 member_id: DEV_MEMBER_ID.to_owned(),
                 user_ref: DEV_USER_REF.to_owned(),
-            }
-        } else {
-            debug!(domain, user, placement, "placement-контекст Б24 распознан");
-            Self {
-                member_id: domain.to_owned(),
-                user_ref: user.to_owned(),
-            }
+            });
         }
+        let member_id = domain.to_lowercase();
+        if member_id == DEV_MEMBER_ID {
+            return Err(PlacementIdentityError::ReservedDomain);
+        }
+        debug!(domain = %member_id, user, placement, "placement-контекст Б24 распознан");
+        Ok(Self {
+            member_id,
+            user_ref: user.to_owned(),
+        })
     }
 
     /// true — идентичность подставлена dev-фоллбэком.
@@ -171,6 +196,62 @@ impl PgPerimeterStore {
                 .await?;
         Ok(existing)
     }
+    /// Метрика шага 0 — детерминированный SQL-агрегат по таблице вердиктов
+    /// (событийный конвейер AD-22 появится в 1.4+). Исключаются: dev-портал
+    /// (`b24_member_id = $1` — фикстура, не установка; параметр биндится
+    /// константой DEV_MEMBER_ID — единственный источник литерала) и строки
+    /// без member_id (не созданы placement-потоком). Установка «прошла шаг 0»
+    /// = в организации есть хотя бы один вердикт (шаг запоминается per-user;
+    /// знаменатель активации UJ-1 — org-уровень).
+    pub(crate) async fn perimeter_metrics(&self) -> Result<(i64, i64, i64), sqlx::Error> {
+        sqlx::query_as(
+            "SELECT \
+                (SELECT count(*) FROM organizations o \
+                 WHERE o.b24_member_id IS NOT NULL AND o.b24_member_id <> $1) AS installs, \
+                (SELECT count(DISTINCT v.organization_id) FROM perimeter_verdicts v \
+                 JOIN organizations o ON o.id = v.organization_id \
+                 WHERE o.b24_member_id IS NOT NULL AND o.b24_member_id <> $1) AS step0_completed, \
+                (SELECT count(DISTINCT v.organization_id) FROM perimeter_verdicts v \
+                 JOIN organizations o ON o.id = v.organization_id \
+                 WHERE o.b24_member_id IS NOT NULL AND o.b24_member_id <> $1 \
+                   AND v.verdict = 'seller') AS sellers",
+        )
+        .bind(DEV_MEMBER_ID)
+        .fetch_one(&self.db)
+        .await
+    }
+}
+
+// --- Бюджет обращений к БД (ревью Story 1.2: зависший запрос — тоже
+// деградация; паттерн /health распространён на все /v1-хендлеры) ---
+
+/// Оборачивает sqlx-футуру в бюджет {STORE_BUDGET:?}; просрочка = 503-конверт.
+async fn budgeted_sqlx<T>(
+    fut: impl Future<Output = Result<T, sqlx::Error>>,
+) -> Result<T, (StatusCode, Json<ErrorEnvelope>)> {
+    match tokio::time::timeout(STORE_BUDGET, fut).await {
+        Ok(res) => res.map_err(|err| {
+            warn!(?err, "store шага 0: ошибка БД");
+            db_unavailable()
+        }),
+        Err(_) => {
+            warn!("store шага 0: превышен бюджет {STORE_BUDGET:?} — БД не отвечает");
+            Err(db_unavailable())
+        }
+    }
+}
+
+/// То же для вызовов стора с доменной ошибкой StoreError.
+async fn budgeted_store<T>(
+    fut: impl Future<Output = Result<T, StoreError>>,
+) -> Result<T, (StatusCode, Json<ErrorEnvelope>)> {
+    match tokio::time::timeout(STORE_BUDGET, fut).await {
+        Ok(res) => res.map_err(store_error_response),
+        Err(_) => {
+            warn!("store шага 0: превышен бюджет {STORE_BUDGET:?} — БД не отвечает");
+            Err(db_unavailable())
+        }
+    }
 }
 
 impl PerimeterStore for PgPerimeterStore {
@@ -221,6 +302,7 @@ impl PerimeterStore for PgPerimeterStore {
         let raw = match inserted {
             Some((raw,)) => raw,
             None => {
+                info!("вердикт уже сохранён — возвращён существующий (идемпотентность per-user)");
                 let (existing,): (String,) =
                     sqlx::query_as("SELECT verdict FROM perimeter_verdicts WHERE user_id = $1")
                         .bind(user_id)
@@ -321,25 +403,35 @@ enum VerdictValidationError {
     MarketplacesRequired,
     /// Пустая (после trim) метка площадки в списке.
     InvalidMarketplaces,
+    /// Площадка вне закрытого списка Ф0 (wildberries/ozon/yandex_market).
+    UnknownMarketplace,
 }
 
-/// Валидация тела запроса → ответы домена: строковая гигиена (trim, пустые
-/// метки) и литералы — здесь; бизнес-инвариант «селлер ⇒ площадки» —
-/// в [`PerimeterAnswers::new`] домена.
+/// Валидация тела запроса → ответы домена: строковая гигиена (trim,
+/// закрытый список площадок, дедупликация) — здесь; бизнес-инвариант
+/// «селлер ⇒ площадки» — в [`PerimeterAnswers::new`] домена.
 fn answers_from_request(
     body: VerdictRequestBody,
 ) -> Result<PerimeterAnswers, VerdictValidationError> {
     let raw_model = body.trade_model.unwrap_or_default();
     let trade_model = trade_model_from_str(raw_model.trim())
         .ok_or_else(|| VerdictValidationError::InvalidTradeModel(raw_model.clone()))?;
-    let marketplaces: Vec<String> = body
+    let mut marketplaces: Vec<String> = body
         .marketplaces
         .iter()
-        .map(|m| m.trim().to_owned())
+        .map(|m| m.trim().to_lowercase())
         .collect();
     if marketplaces.iter().any(|m| m.is_empty()) {
         return Err(VerdictValidationError::InvalidMarketplaces);
     }
+    if marketplaces
+        .iter()
+        .any(|m| !ALLOWED_MARKETPLACES.contains(&m.as_str()))
+    {
+        return Err(VerdictValidationError::UnknownMarketplace);
+    }
+    marketplaces.sort();
+    marketplaces.dedup();
     PerimeterAnswers::new(trade_model, marketplaces)
         .map_err(|_| VerdictValidationError::MarketplacesRequired)
 }
@@ -362,9 +454,14 @@ fn error_response(
     code: &str,
     message: impl Into<String>,
 ) -> (StatusCode, Json<ErrorEnvelope>) {
+    let message = message.into();
+    let request_id = Uuid::now_v7();
+    // request_id обязан попадать в логи: сообщённый пользователем идентификатор
+    // коррелируется с записями шлюза (ревью Story 1.2).
+    warn!(code, %request_id, %message, "запрос отклонён — конверт ошибки /v1");
     (
         status,
-        Json(ErrorEnvelope::new(code, message).with_request_id(Uuid::now_v7())),
+        Json(ErrorEnvelope::new(code, message).with_request_id(request_id)),
     )
 }
 
@@ -392,14 +489,25 @@ fn store_error_response(err: StoreError) -> (StatusCode, Json<ErrorEnvelope>) {
     }
 }
 
-/// 422-конверт ошибки валидации ответов шага 0 (code человекочитаемый).
+/// 422-конверт ошибки валидации ответов шага 0 (code человекочитаемый;
+/// отражение чужого ввода обрезается — мегабайтная строка не возвращается
+/// в сообщении).
 fn validation_response(err: VerdictValidationError) -> (StatusCode, Json<ErrorEnvelope>) {
+    /// Эхо чужого ввода в сообщении об ошибке — не длиннее 64 символов.
+    fn echo(raw: &str) -> String {
+        let mut shown: String = raw.chars().take(64).collect();
+        if raw.chars().count() > 64 {
+            shown.push('…');
+        }
+        shown
+    }
     let (code, message): (&str, String) = match err {
         VerdictValidationError::InvalidTradeModel(raw) => (
             "invalid_trade_model",
             format!(
-                "торговая модель не распознана: {raw:?}; допустимы marketplace_seller, \
-                 marketplace_planned, own_channels_no_marketplaces, services_other"
+                "торговая модель не распознана: {:?}; допустимы marketplace_seller, \
+                 marketplace_planned, own_channels_no_marketplaces, services_other",
+                echo(&raw)
             ),
         ),
         VerdictValidationError::MarketplacesRequired => (
@@ -410,8 +518,21 @@ fn validation_response(err: VerdictValidationError) -> (StatusCode, Json<ErrorEn
             "invalid_marketplaces",
             "список площадок содержит пустое значение".to_owned(),
         ),
+        VerdictValidationError::UnknownMarketplace => (
+            "unknown_marketplace",
+            "площадка вне списка Ф0: wildberries, ozon, yandex_market".to_owned(),
+        ),
     };
     error_response(StatusCode::UNPROCESSABLE_ENTITY, code, message)
+}
+
+/// 422-конверт зарезервированного DOMAIN (dev-портал — фикстура, не портал).
+fn reserved_domain_response() -> (StatusCode, Json<ErrorEnvelope>) {
+    error_response(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "reserved_member_id",
+        "DOMAIN зарезервирован для dev-режима — укажите домен портала Б24",
+    )
 }
 
 // --- Хендлеры ---
@@ -432,28 +553,11 @@ async fn onboarding_state(
             ));
         }
     };
-    let identity = PlacementIdentity::from_params(&params);
-    let org_id = state
-        .perimeter
-        .ensure_organization(&identity.member_id)
-        .await
-        .map_err(|err| {
-            warn!(?err, member_id = %identity.member_id, "upsert организации не выполнен");
-            db_unavailable()
-        })?;
-    let user_id = state
-        .perimeter
-        .ensure_user(org_id, &identity.user_ref)
-        .await
-        .map_err(|err| {
-            warn!(?err, "upsert пользователя не выполнен");
-            db_unavailable()
-        })?;
-    let verdict = state
-        .perimeter
-        .load_verdict(user_id)
-        .await
-        .map_err(store_error_response)?;
+    let identity =
+        PlacementIdentity::from_params(&params).map_err(|_| reserved_domain_response())?;
+    let org_id = budgeted_sqlx(state.perimeter.ensure_organization(&identity.member_id)).await?;
+    let user_id = budgeted_sqlx(state.perimeter.ensure_user(org_id, &identity.user_ref)).await?;
+    let verdict = budgeted_store(state.perimeter.load_verdict(user_id)).await?;
     let state_str = match verdict {
         None => "step0_required",
         Some(Verdict::Seller) => "funnel",
@@ -492,37 +596,25 @@ async fn perimeter_verdict(
     // Валидация до каких-либо касаний БД: 422 не создаёт сущностей и
     // работает даже в деградации (маршруты живы).
     let answers = answers_from_request(body).map_err(validation_response)?;
-    let identity = PlacementIdentity::from_params(&params);
-    let org_id = state
-        .perimeter
-        .ensure_organization(&identity.member_id)
-        .await
-        .map_err(|err| {
-            warn!(?err, member_id = %identity.member_id, "upsert организации не выполнен");
-            db_unavailable()
-        })?;
-    let user_id = state
-        .perimeter
-        .ensure_user(org_id, &identity.user_ref)
-        .await
-        .map_err(|err| {
-            warn!(?err, "upsert пользователя не выполнен");
-            db_unavailable()
-        })?;
+    let identity =
+        PlacementIdentity::from_params(&params).map_err(|_| reserved_domain_response())?;
+    let org_id = budgeted_sqlx(state.perimeter.ensure_organization(&identity.member_id)).await?;
+    let user_id = budgeted_sqlx(state.perimeter.ensure_user(org_id, &identity.user_ref)).await?;
     let verdict = decide_verdict(&answers);
-    let stored = state
-        .perimeter
-        .save_verdict(org_id, user_id, &answers, verdict)
-        .await
-        .map_err(store_error_response)?;
+    let stored = budgeted_store(
+        state
+            .perimeter
+            .save_verdict(org_id, user_id, &answers, verdict),
+    )
+    .await?;
     if identity.is_dev_fallback() {
-        info!("вердикт шага 0 зафиксирован в dev-режиме (dev-фоллбэк, в метрики не попадёт)");
+        info!("шаг 0 завершён в dev-режиме (dev-фоллбэк, в метрики не попадёт)");
     }
     let (verdict_str, state_str) = match stored {
         Verdict::Seller => ("seller", "funnel"),
         Verdict::NonSeller => ("non_seller", "exit_screen"),
     };
-    info!(%user_id, verdict = verdict_str, "вердикт шага 0 зафиксирован");
+    info!(%user_id, verdict = verdict_str, "шаг 0 завершён: действующий вердикт");
     Ok((
         StatusCode::OK,
         Json(VerdictResponse {
@@ -532,31 +624,10 @@ async fn perimeter_verdict(
     ))
 }
 
-/// Метрика шага 0 — детерминированный SQL-агрегат по таблице вердиктов
-/// (событийный конвейер AD-22 появится в 1.4+). Исключаются: dev-портал
-/// (`b24_member_id = 'dev-portal'` — фикстура, не установка) и строки без
-/// member_id (не созданы placement-потоком). Установка «прошла шаг 0» =
-/// в организации есть хотя бы один вердикт (шаг запоминается per-user;
-/// знаменатель активации UJ-1 — org-уровень).
+/// `GET /v1/metrics/perimeter` — агрегат стора (без PII, без dev-портала).
 async fn perimeter_metrics(State(state): State<AppState>) -> ApiResult<PerimeterMetricsResponse> {
-    let (installs, step0_completed, sellers): (i64, i64, i64) = sqlx::query_as(
-        "SELECT \
-            (SELECT count(*) FROM organizations o \
-             WHERE o.b24_member_id IS NOT NULL AND o.b24_member_id <> 'dev-portal') AS installs, \
-            (SELECT count(DISTINCT v.organization_id) FROM perimeter_verdicts v \
-             JOIN organizations o ON o.id = v.organization_id \
-             WHERE o.b24_member_id IS NOT NULL AND o.b24_member_id <> 'dev-portal') AS step0_completed, \
-            (SELECT count(DISTINCT v.organization_id) FROM perimeter_verdicts v \
-             JOIN organizations o ON o.id = v.organization_id \
-             WHERE o.b24_member_id IS NOT NULL AND o.b24_member_id <> 'dev-portal' \
-               AND v.verdict = 'seller') AS sellers",
-    )
-    .fetch_one(&state.perimeter.db)
-    .await
-    .map_err(|err| {
-        warn!(?err, "метрика шага 0 не вычислена");
-        db_unavailable()
-    })?;
+    let (installs, step0_completed, sellers) =
+        budgeted_sqlx(state.perimeter.perimeter_metrics()).await?;
     Ok((
         StatusCode::OK,
         Json(PerimeterMetricsResponse {
@@ -566,6 +637,20 @@ async fn perimeter_metrics(State(state): State<AppState>) -> ApiResult<Perimeter
             step0_share: step0_share(installs, step0_completed),
         }),
     ))
+}
+
+/// 404-конверт для неизвестных маршрутов (договор об ошибках — конверт всегда).
+pub(crate) async fn not_found() -> (StatusCode, Json<ErrorEnvelope>) {
+    error_response(StatusCode::NOT_FOUND, "not_found", "маршрут не найден")
+}
+
+/// 405-конверт для неверного метода.
+pub(crate) async fn method_not_allowed() -> (StatusCode, Json<ErrorEnvelope>) {
+    error_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        "method_not_allowed",
+        "метод не поддерживается этим маршрутом",
+    )
 }
 
 /// Роутер шага 0 (подключается в main к /health и /ready).
@@ -596,15 +681,40 @@ mod tests {
                 ("DOMAIN", "shop.example"),
                 ("USER_ID", "42"),
                 ("PLACEMENT", "DEFAULT"),
-            ]));
+            ]))
+            .expect("полный контекст — не ошибка");
             assert_eq!(identity.member_id, "shop.example");
             assert_eq!(identity.user_ref, "42");
             assert!(!identity.is_dev_fallback());
         }
 
         #[test]
+        fn domain_is_canonicalized_to_lowercase() {
+            // Варианты регистра не должны плодить дубликаты организаций
+            // в реестре установок (инфляция знаменателя UJ-1).
+            let identity = PlacementIdentity::from_params(&params(&[
+                ("DOMAIN", "SHOP.Example"),
+                ("USER_ID", "42"),
+            ]))
+            .expect("валидный контекст");
+            assert_eq!(identity.member_id, "shop.example");
+        }
+
+        #[test]
+        fn literal_dev_portal_domain_is_reserved() {
+            // Явный DOMAIN=dev-portal — коллизия с фикстурой: 422, не слияние.
+            let err = PlacementIdentity::from_params(&params(&[
+                ("DOMAIN", "DEV-portal"),
+                ("USER_ID", "1"),
+            ]))
+            .expect_err("зарезервированный литерал — отказ");
+            assert_eq!(err, PlacementIdentityError::ReservedDomain);
+        }
+
+        #[test]
         fn empty_context_falls_back_to_dev() {
-            let identity = PlacementIdentity::from_params(&HashMap::new());
+            let identity = PlacementIdentity::from_params(&HashMap::new())
+                .expect("пустой контекст — фоллбэк, не ошибка");
             assert_eq!(identity.member_id, "dev-portal");
             assert_eq!(identity.user_ref, "dev-user");
             assert!(identity.is_dev_fallback());
@@ -614,9 +724,12 @@ mod tests {
         fn partial_context_falls_back_to_dev() {
             // Только DOMAIN или только USER_ID не идентифицируют пользователя.
             let only_domain =
-                PlacementIdentity::from_params(&params(&[("DOMAIN", "shop.example")]));
+                PlacementIdentity::from_params(&params(&[("DOMAIN", "shop.example")]))
+                    .expect("частичный контекст — фоллбэк, не ошибка");
             assert!(only_domain.is_dev_fallback());
-            let only_user = PlacementIdentity::from_params(&params(&[("USER_ID", "42")]));
+
+            let only_user = PlacementIdentity::from_params(&params(&[("USER_ID", "42")]))
+                .expect("частичный контекст — фоллбэк, не ошибка");
             assert!(only_user.is_dev_fallback());
         }
 
@@ -625,12 +738,14 @@ mod tests {
             let identity = PlacementIdentity::from_params(&params(&[
                 ("DOMAIN", "  shop.example  "),
                 ("USER_ID", " 42 "),
-            ]));
+            ]))
+            .expect("валидный контекст");
             assert_eq!(identity.member_id, "shop.example");
             assert_eq!(identity.user_ref, "42");
 
             let blank =
-                PlacementIdentity::from_params(&params(&[("DOMAIN", "   "), ("USER_ID", "42")]));
+                PlacementIdentity::from_params(&params(&[("DOMAIN", "   "), ("USER_ID", "42")]))
+                    .expect("пустой контекст — фоллбэк");
             assert!(blank.is_dev_fallback());
         }
     }
@@ -693,12 +808,34 @@ mod tests {
         fn valid_seller_answers_pass() {
             let answers = answers_from_request(request(
                 Some("marketplace_seller"),
-                &[" wildberries ", "ozon"],
+                &[" Wildberries ", "Ozon"],
             ))
             .expect("валидные ответы селлера");
             assert_eq!(answers.trade_model, TradeModel::MarketplaceSeller);
-            assert_eq!(answers.marketplaces, ["wildberries", "ozon"]);
+            // Нормализация: trim + нижний регистр + сортировка + дедуп.
+            assert_eq!(answers.marketplaces, ["ozon", "wildberries"]);
             assert_eq!(decide_verdict(&answers), Verdict::Seller);
+        }
+
+        #[test]
+        fn marketplaces_are_deduplicated() {
+            let answers = answers_from_request(request(
+                Some("marketplace_seller"),
+                &["ozon", "OZON", " ozon ", "wildberries"],
+            ))
+            .expect("дубликаты не должны ломать сохранение");
+            assert_eq!(answers.marketplaces, ["ozon", "wildberries"]);
+        }
+
+        #[test]
+        fn unknown_marketplace_is_rejected() {
+            // Закрытый список Ф0: свободный текст в jsonb не попадает.
+            let err = answers_from_request(request(
+                Some("marketplace_seller"),
+                &["wildberries", "aliexpress"],
+            ))
+            .expect_err("площадка вне списка — 422");
+            assert_eq!(err, VerdictValidationError::UnknownMarketplace);
         }
 
         #[test]
@@ -827,6 +964,10 @@ mod tests {
                     VerdictValidationError::InvalidMarketplaces,
                     "invalid_marketplaces",
                 ),
+                (
+                    VerdictValidationError::UnknownMarketplace,
+                    "unknown_marketplace",
+                ),
             ];
             for (err, code) in cases {
                 let (status, Json(envelope)) = validation_response(err);
@@ -834,6 +975,22 @@ mod tests {
                 assert_eq!(envelope.error.code, code);
                 assert!(!envelope.error.message.is_empty());
             }
+        }
+
+        #[test]
+        fn oversized_input_echo_is_truncated() {
+            let huge = "x".repeat(300);
+            let (_, Json(envelope)) =
+                validation_response(VerdictValidationError::InvalidTradeModel(huge));
+            // Отражение чужого ввода обрезано — мегабайт не возвращается.
+            assert!(envelope.error.message.chars().count() < 200);
+        }
+
+        #[test]
+        fn reserved_domain_envelope_is_422() {
+            let (status, Json(envelope)) = reserved_domain_response();
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(envelope.error.code, "reserved_member_id");
         }
 
         #[test]

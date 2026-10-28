@@ -68,10 +68,25 @@ curl -s localhost:8080/ready    # {"status":"ready",...,"migrations_applied":tru
 без них — документированный dev-фоллбэк `dev-portal`/`dev-user`, исключаемый
 из метрик. Реальная проверка подписи/хендшейка — Story 1.3.
 
+Коды ошибок контрактов `/v1` (конверт `{error:{code,message,request_id,details}}`):
+`invalid_trade_model` / `marketplaces_required` / `invalid_marketplaces` /
+`unknown_marketplace` (422 — ошибки ответов шага 0), `invalid_body` /
+`invalid_query` (422 — неразборчивый запрос), `reserved_member_id` (422 —
+DOMAIN=dev-portal), `database_unavailable` (503 — деградация), `not_found` /
+`method_not_allowed` (404/405 — неизвестный маршрут/метод).
+
+Семантика счётчиков: «установка» = организация с `b24_member_id` (до 1.3 —
+первый placement-запрос, документированная аппроксимация; реальная установка
+придёт с ONAPPINSTALL); `step0_completed` — организации с ≥ 1 вердиктом;
+`sellers` — с ≥ 1 вердиктом `seller`; dev-портал и строки без member_id
+не считаются. SPA обращается к шлюзу по относительным путям `/v1/...` —
+прод-размещение предполагает шлюз/реверс-прокси в том же origin
+(Vite-прокси — только dev).
+
 Партнёрский слот исходящего экрана не-селлера (сборка SPA): переменные
-`VITE_PARTNER_TITLE` / `VITE_PARTNER_URL` (только http/https; дефолт —
-каталог партнёров Битрикс24.Маркет). Конкретного партнёра выбирает владелец
-при публикации (критерий рев-шер ≥ 30%).
+`VITE_PARTNER_TITLE` / `VITE_PARTNER_URL` (только http/https с хостом;
+дефолт — каталог партнёров Битрикс24.Маркет). Конкретного партнёра выбирает
+владелец при публикации (критерий рев-шер ≥ 30%).
 
 ## SPA (оболочка Битрикс24)
 

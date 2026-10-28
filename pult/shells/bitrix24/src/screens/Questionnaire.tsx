@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { B24PlacementContext } from '../b24'
 import { ApiError, submitVerdict, type TradeModel } from '../api'
+import { canSubmitStep0, needsMarketplaces } from '../step0'
 
 const TRADE_MODELS: { value: TradeModel; label: string; hint?: string }[] = [
   {
@@ -29,10 +30,6 @@ const MARKETPLACES: { id: string; label: string }[] = [
   { id: 'yandex_market', label: 'Яндекс Маркет' },
 ]
 
-function needsMarketplaces(tradeModel: TradeModel | null): boolean {
-  return tradeModel === 'marketplace_seller' || tradeModel === 'marketplace_planned'
-}
-
 interface QuestionnaireProps {
   ctx: B24PlacementContext
   onResolved: (state: 'funnel' | 'exit_screen') => void
@@ -52,8 +49,7 @@ export function Questionnaire({ ctx, onResolved }: QuestionnaireProps) {
   const [error, setError] = useState<string | null>(null)
 
   const askMarketplaces = needsMarketplaces(tradeModel)
-  const canSubmit =
-    tradeModel !== null && (!askMarketplaces || marketplaces.length > 0) && !submitting
+  const canSubmit = canSubmitStep0(tradeModel, marketplaces, submitting)
 
   const toggleMarketplace = (id: string) => {
     setMarketplaces((prev) =>

@@ -2,7 +2,7 @@
 title: 'Story 1.2 — Шаг 0: фильтр периметра «ваш бизнес»'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '2e02d8f'
@@ -94,9 +94,44 @@ context:
 - CI integration: +3 шага e2e шага 0 (селлер: state→verdict→funnel→иммутабельность; не-селлер: exit_screen; валидация 422 + метрика installs=2/completed=2/sellers=1/share=1.0 — dev-фоллбэк и sentinel-строка b24_member_id NULL не считаются). Прогон — на push (внешняя верификация).
 
 ## Spec Change Log
+- 2026-10-28, оркестратор (ревью-патчи, шаг 04): 22 группы применены (таблица выше). Ключевое: таймауты (клиент 8с / стор 5с) — зависание больше не «вечный скелетон»; валидация площадок закрытым списком; dev-portal — единственная константа (bind) + CI реально создаёт dev-фоллбэк и проверяет исключение из метрик; деградация /v1 закреплена в CI; 404/405 под конвертом; канонизация DOMAIN; чистые функции screenStateFromError/step0 с тестами. СРЕДА: окружение сессии частично умирало (~16:10 UTC+8) — ~/.cargo и ~/.rustup исчезли, node_modules SPA снесён, _bmad/render и tool-results стёрты; восстановлено: rustup 1.99.1 (rustfmt+clippy), npm ci, re-render скилла. Урок: целевые каталоги вне Git-репо не переживают сброс среды — репо единственная константа (подтверждение Директивы 3).
+
 
 ## Review Triage Log
 
+Ревью 28.10.2026 (3 слоя: blind-hunter [17], edge-case-hunter [10], verification-gap [4, pre-verified]). Триаж: 0 intent_gap / 0 bad_spec — лупбэка нет; 22 группы patch (применены оркестратором: dev-субагент шага 03 умер по таймауту сессии без возможности re-engage) / 3 defer / 3 rejected.
+
+| # | Слой | Локация | Находка | Вердикт | Маршрут |
+|---|------|---------|---------|---------|---------|
+| 1 | blind+edge | App.tsx/api.ts | fetch state/verdict без таймаута — зависший шлюз = вечный скелетон (регресс против паттерна 1.1) | medium | patch: REQUEST_TIMEOUT_MS 8с + AbortController в requestJson (покрывает оба вызова) |
+| 2 | edge | onboarding.rs | хендлеры ждут sqlx без бюджета — PG-зависание вешает запрос без 503 | medium | patch: STORE_BUDGET 5с (budgeted_sqlx/budgeted_store, паттерн /health) |
+| 3 | blind+edge | onboarding.rs | marketplaces — свободный текст (мусор/дубли в jsonb) | medium | patch: закрытый список wildberries/ozon/yandex_market + lowercase + sort/dedup + 422 unknown_marketplace |
+| 4 | blind+edge+VG | onboarding.rs, ci.yml | dev-portal: литерал 3× в SQL (дрейф константы) + исключение из метрик не проверено CI | medium | patch: bind $1 константой DEV_MEMBER_ID; no-query curl в CI до метрики — счётчики 2/2/1 неизменны |
+| 5 | VG | ci.yml | контракт деградации /v1 (422 без БД; 503-конверт) не верифицирован | medium | patch: /v1-ассерты в шаге stop-postgres (v1_code=422 invalid_trade_model; state_code=503 database_unavailable) |
+| 6 | VG | App.tsx | классификация ошибки входа (конверт шлюза ≠ офлайн) инлайн и не протестирована | medium | patch: screenStateFromError в appState.ts + 4 теста |
+| 7 | VG | Questionnaire.tsx | клиентский гейтинг (селлер ⇒ площадки; блок повторной отправки) без регрессионной сети | medium | patch: step0.ts (needsMarketplaces/canSubmitStep0) + 5 тестов |
+| 8 | blind | ConnectionStatus.tsx | устаревший копирайт «фильтр появится в 1.2» — фильтр уже пройден пользователем | low | patch: копирайт про мастер 1.3 |
+| 9 | blind | ExitScreen.tsx | обещание автоматического «вход откроется» противоречит иммутабельности вердикта | low | patch: «поддержка пересмотрит вход» — честный ручной путь |
+| 10 | blind | onboarding.rs | метрика raw-SQL в хендлере мимо стора | low | patch: PgPerimeterStore::perimeter_metrics |
+| 11 | blind | onboarding.rs | request_id генерируется, но не логируется — не коррелируется с логами | low | patch: warn!(code, request_id) в error_response |
+| 12 | blind | ci.yml | psql-шаг «ровно 4 таблицы» устарел после 0005 | low | patch: 5 таблиц (IN + perimeter_verdicts) |
+| 13 | blind | sprint-status.yaml | статус стори (in-progress) расходится с фазой ревью | low | patch: 1-2 → review (шаг 05) |
+| 14 | blind | README.md | нет кодов ошибок /v1, семантики счётчиков, заметки same-origin | low | patch: три абзаца добавлены |
+| 15 | blind | App.tsx | unavailable-экран без кнопки повтора | low | patch: «Повторить» (attempt-рестарт эффекта) |
+| 16 | blind | onboarding.rs | лог «зафиксирован» и на идемпотентном повторе | low | patch: стор логирует replay («уже сохранён»), хендлер — «действующий вердикт» |
+| 17 | edge | onboarding.rs | эхо невалидной trade_model без обрезки (мегабайт в 422) | low | patch: echo() ≤64 символа + тест |
+| 18 | edge | onboarding.rs | DOMAIN=dev-portal коллизирует с фикстурой (слияние порталов) | low | patch: 422 reserved_member_id + тест |
+| 19 | edge | onboarding.rs | DOMAIN без канонизации регистра — дубли организаций, инфляция знаменателя | low | patch: to_lowercase + тест |
+| 20 | edge | router | 404/405 без error-конверта (обход контракта) | low | patch: fallback + method_not_allowed_fallback (main.rs) |
+| 21 | edge | ci.yml | grep '"installs":2' матчит префикс (installs=25 — ложный зелёный) | low | patch: якоря «значение,» / «share:1.0}» |
+| 22 | edge | ExitScreen.tsx | 'https://' (голая схема) проходила prefix-regex | low | patch: new URL-парсинг (hostname обязателен) + тесты; НЮАНС: http:///path валиден по WHATWG (hostname='path') — ожидание теста исправлено, не код |
+| 23 | blind | GET state | неаутентифицированный write-on-GET создаёт «установки» (краулеры) до хендшейка | medium | defer: документированная аппроксимация спеки до 1.3; защита = хендшейк 1.3 / rate-limit 2.3 |
+| 24 | blind | gateway | нет HTTP-уровня Rust-тестов (роутинг/rejections/race) | low | defer: тест-инфраструктура (tower oneshot / sqlx::test при PG в dev-цикле) — Epic 2 hardening |
+| 25 | blind | Questionnaire.tsx | только 3 площадки, нет «другой» (AliExpress-селлер вынужден мисселектить) | low | defer: продуктовое решение мастера 1.3 (Ф0-периметр площадок = WB/Ozon/ЯМ) |
+| 26 | blind | api.ts | fetchPerimeterMetrics без потребителя (мёртвый код) | false | отклонено: клиент metrics — явный таск спеки; tree-shaken в бандле; фикс = правка спеки |
+| 27 | blind | ports.rs | save_verdict принимает и answers, и verdict (избыточность) | false | отклонено: единственный вызов консистентен по построению (decide_verdict в хендлере); расходящегося вызывающего нет |
+
+Патчи применены + полная верификация: 57 Rust-тестов (identity 5, gateway 32 [+6], platform 20), 54 SPA-теста (api 20, appState 17 [+5], step0 5 [новые], b24 7, health 5), гейты hexagonal/valkey/bundle PASS (72 318 Б gzip), живьём: reserved_member_id 422 / 404 и 405 конверты / деградация /v1, fmt/clippy чисто, YAML валиден. CI-прогон — внешний (push).
 ## Design Notes
 
 - Реестр установок: organizations.b24_member_id (UNIQUE, nullable) — реальная установка Б24 отразится здесь при ONAPPINSTALL (1.3+); в 1.2 строка создаётся первым placement-запросом (документированная аппроксимация «установки» для Ф0-пилотов).
