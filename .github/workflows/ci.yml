@@ -1,0 +1,159 @@
+# CI «Пульт селлера» — гейты Story 1.1 (Structural Seed).
+# jobs: rust (build+clippy+test), spa (build+bundle-gate AD-30),
+#       gates (hexagonal-lint AD-1, valkey-grep AD-28),
+#       integration (compose up --wait + миграции + /health + psql-проверка таблиц).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust (build + clippy + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pult
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pult
+      - name: build
+        run: cargo build --workspace
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace
+
+  spa:
+    name: spa (build + bundle gate AD-30)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pult/shells/bitrix24
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: pult/shells/bitrix24/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: bundle-size gate (критический путь < 200 КБ gzip)
+        run: node pult/platform/scripts/bundle-size.mjs pult/shells/bitrix24/dist 200000
+
+  gates:
+    name: gates (hexagonal AD-1 + cache-adapter grep AD-28)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: hexagonal-lint (ядро не зависит от конвейера/оболочек)
+        run: node pult/platform/scripts/hexagonal-lint.mjs
+      - name: valkey-grep (сервер кэша — только Valkey)
+        run: node pult/platform/scripts/valkey-grep.mjs
+
+  integration:
+    name: integration (compose + migrations + /health + tables)
+    runs-on: ubuntu-latest
+    needs: [rust, gates]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pult
+      - name: dev-stack up --wait (PG 18, RabbitMQ 4.4 quorum, Valkey 9.1)
+        run: docker compose -f pult/deploy/docker-compose.yml up -d --wait
+      - name: собрать шлюз
+        working-directory: pult
+        run: cargo build --bin pult-gateway
+      - name: запустить шлюз (миграции применяются на старте)
+        working-directory: pult
+        run: |
+          DATABASE_URL=postgres://pult:pult@localhost:5432/pult \
+            nohup target/debug/pult-gateway > /tmp/pult-gateway.log 2>&1 &
+          echo $! > /tmp/pult-gateway.pid
+          sleep 2
+          cat /tmp/pult-gateway.log
+      - name: /health → 200 (после применения миграций)
+        run: |
+          for i in $(seq 1 60); do
+            body=$(curl -s http://localhost:8080/health || true)
+            echo "$body"
+            echo "$body" | grep -q '"status":"ok"' && exit 0
+            sleep 2
+          done
+          echo "/health не ответил ok за 120 с"; exit 1
+      - name: /ready → 200
+        run: |
+          for i in $(seq 1 30); do
+            body=$(curl -s http://localhost:8080/ready || true)
+            echo "$body"
+            echo "$body" | grep -q '"status":"ready"' && exit 0
+            sleep 2
+          done
+          echo "/ready не ответил ready за 60 с"; exit 1
+      - name: /health → 503 degraded при недоступной БД
+        run: |
+          docker compose -f pult/deploy/docker-compose.yml stop postgres
+          for i in $(seq 1 15); do
+            code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://localhost:8080/health || true)
+            if [ "$code" = "503" ]; then
+              cat /tmp/health.json
+              grep -q '"status":"degraded"' /tmp/health.json && break
+            fi
+            sleep 2
+          done
+          [ "$code" = "503" ] && grep -q '"status":"degraded"' /tmp/health.json
+          docker compose -f pult/deploy/docker-compose.yml start postgres
+      - name: БД восстановилась → /health снова ok
+        run: |
+          for i in $(seq 1 30); do
+            body=$(curl -s http://localhost:8080/health || true)
+            echo "$body"
+            echo "$body" | grep -q '"status":"ok"' && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: повторный compose up не ломает данные
+        run: docker compose -f pult/deploy/docker-compose.yml up -d --wait
+      - name: psql — ровно 4 таблицы Story 1.1 существуют
+        run: |
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -tAc \
+            "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('organizations','users','role_assignments','portal_settings')" \
+            | grep -qx '4'
+      - name: повторный запуск шлюза — миграции no-op (идемпотентность)
+        working-directory: pult
+        run: |
+          kill "$(cat /tmp/pult-gateway.pid)" 2>/dev/null || true
+          sleep 2
+          DATABASE_URL=postgres://pult:pult@localhost:5432/pult \
+            nohup target/debug/pult-gateway > /tmp/pult-gateway-2.log 2>&1 &
+          echo $! > /tmp/pult-gateway.pid
+          for i in $(seq 1 30); do
+            body=$(curl -s http://localhost:8080/health || true)
+            echo "$body"
+            echo "$body" | grep -q '"status":"ok"' && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: остановить шлюз
+        if: always()
+        run: |
+          kill "$(cat /tmp/pult-gateway.pid)" 2>/dev/null || true
+          tail -n 40 /tmp/pult-gateway.log /tmp/pult-gateway-2.log 2>/dev/null || true

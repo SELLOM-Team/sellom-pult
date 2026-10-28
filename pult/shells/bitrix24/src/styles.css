@@ -1,0 +1,177 @@
+/* Каркас SPA «Пульт селлера» (Story 1.1) — минимальный CSS без зависимостей. */
+
+:root {
+  color-scheme: light;
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --ink: #1c2733;
+  --ink-muted: #5b6b7b;
+  --accent: #2f6fed;
+  --ok: #1e9e5a;
+  --warn: #d97a08;
+  --off: #97a3b0;
+  --line: #e3e8ee;
+  --skeleton: #e8edf3;
+  --skeleton-sheen: #f7fafd;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.screen {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100vh;
+}
+
+.screen__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.brand-note {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.card__lead {
+  margin: 0;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+.status {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fafbfd;
+}
+
+.status strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.status p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.status__dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  background: var(--off);
+}
+
+.status--gateway-up .status__dot {
+  background: var(--ok);
+}
+
+.status--gateway-degraded .status__dot {
+  background: var(--warn);
+}
+
+.status--offline .status__dot {
+  background: var(--off);
+}
+
+.context {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  font-size: 13px;
+}
+
+.context dt {
+  color: var(--ink-muted);
+}
+
+.context dd {
+  margin: 0;
+}
+
+.screen__footer {
+  color: var(--ink-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Скелетон: shimmer-анимация на CSS, без JS и без спиннеров. */
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton__line {
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--skeleton) 25%, var(--skeleton-sheen) 50%, var(--skeleton) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-sheen 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-sheen {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton__line {
+    animation: none;
+  }
+}

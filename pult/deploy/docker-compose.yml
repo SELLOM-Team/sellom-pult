@@ -1,0 +1,60 @@
+# Dev-стек «Пульт селлера» (Story 1.1, Structural Seed).
+# Инфраструктура: PostgreSQL 18 + RabbitMQ 4.4 (quorum) + Valkey 9.1 (AD-28:
+# сервер кэша — только valkey/valkey, образы конкурента запрещены CI-грепом).
+# Прод-механика (k8s/systemd) сюда не входит — только dev.
+#
+# Запуск: docker compose -f pult/deploy/docker-compose.yml up -d --wait
+# Данные персистят в именованных томах — повторный up не ломает данные.
+
+name: pult-dev
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: pult
+      POSTGRES_PASSWORD: pult
+      POSTGRES_DB: pult
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pult -d pult"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  rabbitmq:
+    image: rabbitmq:4.4-management
+    # management-плагин — только для dev-отладки (UI на :15672)
+    volumes:
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - rabbitdata:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  valkey:
+    image: valkey/valkey:9.1
+    command: ["valkey-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkeydata:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  pgdata:
+  rabbitdata:
+  valkeydata:

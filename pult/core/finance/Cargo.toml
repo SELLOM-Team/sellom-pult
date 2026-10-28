@@ -1,0 +1,8 @@
+[package]
+name = "pult-core-finance"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+pult-platform = { path = "../../platform" }

@@ -192,3 +192,27 @@ Stage Summary:
 - Пятый BMAD-артефакт: sprint-status.yaml — трекинг 9 эпиков / 39 сторис; гейт готовности PASS.
 - Все фазы planning завершены: brief → PRD → spine → epics → sprint-status. Ворота в разработку открыты.
 - Следующий шаг: bmad-build — Story 1.1 (Стартовый каркас приложения и Structural Seed spine: Rust-монорепа pult/ по AD-20/28/29/30).
+
+---
+Task ID: 11
+Agent: dev-субагент (Story 1.1, spec-1-1-structural-seed.md)
+Task: Имплементация Story 1.1 «Стартовый каркас приложения и Structural Seed» по спеке (базис 35c2b77).
+
+Work Log:
+- Прочитаны спека + epic-1-context.md (контекст из frontmatter). Окружение: cargo/rustc отсутствовали → установлен rustup с toolchain 1.99.1 (совпадает с AD-20; манифест stable 2026-10-15 подтверждает 1.99.1). Docker/PostgreSQL в песочнице нет — integration-AC отдаётся CI (как предписано Design Notes спеки).
+- Создана монорепа pult/: workspace на 13 крейтов (resolver 3, edition 2024), rust-toolchain.toml 1.99.1 (+clippy, rustfmt), Cargo.lock закоммичен; workspace-пины AD-20: tokio 1.54.1, axum 0.8.9, sqlx 0.9.0 (features: runtime-tokio, tls-rustls, postgres, migrate).
+- pult-platform: событийный конверт AD-22 EventEnvelope (event_id=Uuid::now_v7(), past-tense snake_case-валидация event_type, organization_id, occurred_at Utc, schema_version, payload), конверт ошибок {error:{code,message,request_id,details}}, ServiceConfig::from_env (DATABASE_URL/PULT_HTTP_PORT/PULT_ENV). Крейт без axum/sqlx — зависим для всех слоёв без циклов. 8 юнит-тестов.
+- 7 крейтов pult-core-* (sync/data/finance/shturman/rules/billing/identity): lib.rs + ports.rs с заготовкой порта-трейта по AR-2 (SyncPort…IdentityPort); 4 крейта pult-conveyor-* (adapters/action_bus/reconciliation/workers) — пустые заготовки. Зависимости только на platform (граница AD-1).
+- pult-gateway: бин pult-gateway (Axum 0.8.9): /health (проба БД SELECT 1 под tokio-timeout 500мс → 200 ok / 503 degraded с версией), /ready (200 ready при применённых миграциях+живой БД, иначе 503 not_ready), connect_lazy-пул (старт без БД), sqlx::migrate!("../db/migrations") в фоне с ретраем 5с (в спеке опечатка «../../» — из pult/gateway вверх до pult/ это один уровень; каноничный путь pult/db/migrations сохранён).
+- pult/db/migrations: 0001_organizations, 0002_users (FK→organizations, external_ref — точка интеграции Б24, БЕЗ паролей), 0003_role_assignments (FK→organizations/users), 0004_portal_settings (1:1 jsonb). timestamptz/uuid/gen_random_uuid()-fallback по конвенциям; только нужды Story 1.1.
+- pult/deploy: docker-compose.yml (postgres:18, rabbitmq:4.4-management с rabbitmq.conf default_queue_type=quorum, valkey/valkey:9.1; healthchecks; именованные тома; БД pult/pult) — YAML-структура валидирована парсером (docker в песочнице нет).
+- pult/platform/scripts: hexagonal-lint.mjs (AD-1: манифесты+исходники core на pult-conveyor-*/pult-shell-*), valkey-grep.mjs (AD-28: image:/FROM в *.yml/*.yaml/Dockerfile* по word-boundary), bundle-size.mjs (AD-30: gzip JS входных чанков из index.html против лимита).
+- pult/shells/bitrix24: Vite 8.3.5 + React 19.3.1 + TS 5.9.3 (npm-версии верифицированы реестром; lockfile закоммичен). Экран «Начните подключение», точка интеграции b24.ts (чтение PLACEMENT/PLACEMENT_OPTIONS/LANG — iframe-placement, без аутентификации), честная заглушка статуса (ConnectionStatus: gateway-up/degraded/offline — без бутафорского CTA), скелетон вместо спиннеров.
+- .github/workflows/ci.yml: 4 jobs — rust (build/clippy -D warnings/test), spa (npm ci+build+bundle-gate), gates (hexagonal+valkey), integration (compose up --wait → шлюз → /health ok → /ready → стоп PG → /health 503 degraded → восстановление → повторный up → psql ровно 4 таблицы → повторный старт шлюза no-op). Кэши Swatinem/rust-cache + setup-node npm-cache.
+- pult/README.md (запуск стека одной командой + гейты + конвенции); .gitignore дополнен (target/, pult/shells/bitrix24/dist/).
+- Верификация: cargo build --workspace OK (13 крейтов); cargo clippy --workspace --all-targets -- -D warnings — 0 предупреждений; cargo test --workspace — 11 тестов зелены (8 platform + 3 gateway); npm run build OK (gzip JS 69 534 Б < 200 000 — PASS гейта); hexagonal-lint/valkey-grep PASS + негативные тесты (image:redis в yaml/Dockerfile и dev-dep pult-conveyor-* в core → оба гейта краснеют, перечисляют нарушения); degraded-режим шлюза проверен локально вживую: без PG /health→503 {"status":"degraded","version":"0.1.0"} за ~0.5с, /ready→503 not_ready, ретрай миграций в логе, шлюз жив. Happy-path миграций/таблиц — за CI-джобой integration (нет docker/PG в песочнице).
+
+Stage Summary:
+- Structural Seed поставлен целиком по Code Map спеки: pult/ (13 крейтов, gateway+platform+7 core+4 conveyor), db/migrations 0001..0004, deploy-стек, 3 гейт-скрипта, SPA-оболочка Б24, CI на 4 jobs, README.
+- Гейты AD-1/AD-28/AD-30 работают как исполняемые проверки (в обе стороны: PASS на каркасе, FAIL на нарушениях).
+- Осталось на внешние контуры: CI-прогон на push (нет docker/PG локально), установка из Маркета Б24 (владелец, dev-аккаунт) — помечены как внешние верификации в спеке.

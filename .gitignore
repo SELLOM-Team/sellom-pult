@@ -3,3 +3,9 @@ node_modules/
 bmad-install.log
 .env
 tool-results/
+
+# --- Rust (pult/) ---
+target/
+
+# --- SPA build output (pult/shells/bitrix24/) ---
+pult/shells/bitrix24/dist/
