@@ -9,7 +9,9 @@ CREATE TABLE perimeter_verdicts (
     id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id uuid        NOT NULL,
     user_id         uuid        NOT NULL,
-    trade_model     text        NOT NULL,
+    trade_model     text        NOT NULL
+                    CHECK (trade_model IN ('marketplace_seller', 'marketplace_planned',
+                                           'own_channels_no_marketplaces', 'services_other')),
     marketplaces    jsonb       NOT NULL DEFAULT '[]'::jsonb,
     verdict         text        NOT NULL CHECK (verdict IN ('seller', 'non_seller')),
     created_at      timestamptz NOT NULL DEFAULT now(),

@@ -38,9 +38,13 @@ use pult_platform::error::ErrorEnvelope;
 
 use crate::AppState;
 
-/// Бюджет любого обращения к БД в /v1-хендлерах (паттерн /health: запрос,
+/// Бюджет ОДНОГО обращения к БД в /v1-хендлерах (паттерн /health: запрос,
 /// не уложившийся в бюджет, — «БД недоступна», а не зависший запрос).
-const STORE_BUDGET: Duration = Duration::from_secs(5);
+/// Хендлеры цепляют до трёх последовательных операций (ensure_organization →
+/// ensure_user → load/save): 3 × 2с = 6с < 8с клиентского бюджета
+/// REQUEST_TIMEOUT_MS (SPA api.ts) — иначе клиент ушёл бы в офлайн раньше,
+/// чем шлюз честно ответил деградацией (формальное ревью Story 1.2).
+const STORE_BUDGET: Duration = Duration::from_secs(2);
 
 /// Закрытый список площадок шага 0 (контракт Ф0: WB/Ozon/ЯМ) — свободный
 /// текст в jsonb не попадает (ревью Story 1.2: валидация закрытым списком).
@@ -55,9 +59,13 @@ const DEV_USER_REF: &str = "dev-user";
 /// Идентичность из placement-контекста Б24: member_id (DOMAIN) → ключ
 /// реестра установок, user_ref (USER_ID) → внешний ref пользователя.
 ///
-/// Частичный контекст (есть DOMAIN, нет USER_ID — или наоборот) не
-/// идентифицирует пользователя: честный dev-фоллбэк, как и полное отсутствие
-/// placement-параметров. Никакой собственной аутентификации (NFR-6).
+/// Полное отсутствие placement-параметров — документированный dev-фоллбэк.
+/// Частичный контекст (есть DOMAIN без USER_ID или наоборот) пользователя
+/// не идентифицирует, но и dev-режимом быть не должен: реальный портал с
+/// потерянным параметром не может молча слиться с фикстурой — честный отказ
+/// 422 `invalid_placement` (формальное ревью Story 1.2). Сверхдлинные
+/// значения тоже отвергаются: краулерский мусор не становится постоянной
+/// строкой реестра установок. Никакой собственной аутентификации (NFR-6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PlacementIdentity {
     /// Ключ реестра установок (organizations.b24_member_id).
@@ -72,14 +80,22 @@ pub(crate) enum PlacementIdentityError {
     /// DOMAIN коллизирует с зарезервированным dev-идентификатором —
     /// реальный портал не должен молча сливаться с dev-фикстурой.
     ReservedDomain,
+    /// Частичный контекст (есть DOMAIN без USER_ID или наоборот) — не
+    /// идентифицирует пользователя; тихая запись реального портала в
+    /// dev-фикстуру запрещена.
+    PartialContext,
+    /// Значение DOMAIN/USER_ID слишком длинное (краулер/мусор в query).
+    Oversized,
 }
 
 impl PlacementIdentity {
     /// Читает placement-контекст из query-параметров запроса.
     ///
-    /// DOMAIN канонизируется в нижний регистр (варианты регистра не должны
-    /// плодить дубликаты организаций в реестре установок); литерал
-    /// dev-портала в явном DOMAIN — отказ (422 `reserved_member_id`).
+    /// DOMAIN канонизируется (нижний регистр + хвостовая точка FQDN —
+    /// варианты одного портала не должны плодить дубликаты организаций в
+    /// реестре установок); частичный контекст и сверхдлинные значения —
+    /// отказ (422 `invalid_placement`); литерал dev-портала в явном
+    /// DOMAIN — отказ (422 `reserved_member_id`).
     fn from_params(params: &HashMap<String, String>) -> Result<Self, PlacementIdentityError> {
         let domain = params.get("DOMAIN").map(|v| v.trim()).unwrap_or_default();
         let user = params.get("USER_ID").map(|v| v.trim()).unwrap_or_default();
@@ -87,23 +103,39 @@ impl PlacementIdentity {
             .get("PLACEMENT")
             .map(|v| v.trim())
             .unwrap_or_default();
-        if domain.is_empty() || user.is_empty() {
+        if domain.is_empty() && user.is_empty() {
             debug!(
                 placement,
-                "placement-контекст неполный или отсутствует — dev-фоллбэк (в метрики не попадёт)"
+                "placement-контекст отсутствует — dev-фоллбэк (в метрики не попадёт)"
             );
             return Ok(Self {
                 member_id: DEV_MEMBER_ID.to_owned(),
                 user_ref: DEV_USER_REF.to_owned(),
             });
         }
+        if domain.is_empty() || user.is_empty() {
+            debug!(
+                placement,
+                "placement-контекст частичный (DOMAIN без USER_ID или наоборот) — отказ"
+            );
+            return Err(PlacementIdentityError::PartialContext);
+        }
+        // Б24-домен — DNS-имя (≤ 253), USER_ID — короткий внешний ref;
+        // длинные значения — мусор краулеров, не идентичность (write-on-GET
+        // публичен до хендшейка 1.3 — не плодим постоянные строки-гиганты).
+        if domain.len() > 253 || user.len() > 64 {
+            return Err(PlacementIdentityError::Oversized);
+        }
+        // Канонизация: регистр + хвостовая точка FQDN — варианты одного
+        // портала не должны плодить дубликаты организаций (знаменатель UJ-1).
         let member_id = domain.to_lowercase();
+        let member_id = member_id.trim_end_matches('.');
         if member_id == DEV_MEMBER_ID {
             return Err(PlacementIdentityError::ReservedDomain);
         }
         debug!(domain = %member_id, user, placement, "placement-контекст Б24 распознан");
         Ok(Self {
-            member_id,
+            member_id: member_id.to_owned(),
             user_ref: user.to_owned(),
         })
     }
@@ -421,14 +453,25 @@ fn answers_from_request(
         .iter()
         .map(|m| m.trim().to_lowercase())
         .collect();
-    if marketplaces.iter().any(|m| m.is_empty()) {
-        return Err(VerdictValidationError::InvalidMarketplaces);
-    }
-    if marketplaces
-        .iter()
-        .any(|m| !ALLOWED_MARKETPLACES.contains(&m.as_str()))
-    {
-        return Err(VerdictValidationError::UnknownMarketplace);
+    // Площадки валидируются только для селлерских моделей: для не-селлеров
+    // домен всё равно нормализует список в пустой (PerimeterAnswers::new) —
+    // 422 на «лишний» список был бы контрактом-односторонкой: ozon проходит,
+    // aliexpress падает, при одинаковом результате (формальное ревью 1.2).
+    if matches!(
+        trade_model,
+        TradeModel::MarketplaceSeller | TradeModel::MarketplacePlanned
+    ) {
+        if marketplaces.iter().any(|m| m.is_empty()) {
+            return Err(VerdictValidationError::InvalidMarketplaces);
+        }
+        if marketplaces
+            .iter()
+            .any(|m| !ALLOWED_MARKETPLACES.contains(&m.as_str()))
+        {
+            return Err(VerdictValidationError::UnknownMarketplace);
+        }
+    } else {
+        marketplaces.clear();
     }
     marketplaces.sort();
     marketplaces.dedup();
@@ -489,18 +532,22 @@ fn store_error_response(err: StoreError) -> (StatusCode, Json<ErrorEnvelope>) {
     }
 }
 
+/// Эхо чужого ввода в сообщении об ошибке: ≤ 64 символа, control-символы
+/// вырезаны — ни мегабайт, ни подделка многострочных лог-записей через
+/// warn!-лог не проходят (формальное ревью Story 1.2).
+fn echo(raw: &str) -> String {
+    let filtered: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let mut shown: String = filtered.chars().take(64).collect();
+    if filtered.chars().count() > 64 {
+        shown.push('…');
+    }
+    shown
+}
+
 /// 422-конверт ошибки валидации ответов шага 0 (code человекочитаемый;
 /// отражение чужого ввода обрезается — мегабайтная строка не возвращается
 /// в сообщении).
 fn validation_response(err: VerdictValidationError) -> (StatusCode, Json<ErrorEnvelope>) {
-    /// Эхо чужого ввода в сообщении об ошибке — не длиннее 64 символов.
-    fn echo(raw: &str) -> String {
-        let mut shown: String = raw.chars().take(64).collect();
-        if raw.chars().count() > 64 {
-            shown.push('…');
-        }
-        shown
-    }
     let (code, message): (&str, String) = match err {
         VerdictValidationError::InvalidTradeModel(raw) => (
             "invalid_trade_model",
@@ -535,6 +582,26 @@ fn reserved_domain_response() -> (StatusCode, Json<ErrorEnvelope>) {
     )
 }
 
+/// Маппит ошибки placement-контекста: резерв — 422 `reserved_member_id`,
+/// частичный/сверхдлинный — 422 `invalid_placement` (честная диагностика
+/// вместо тихой записи в dev-фикстуру или реестра-мусора).
+fn placement_error_response(err: PlacementIdentityError) -> (StatusCode, Json<ErrorEnvelope>) {
+    match err {
+        PlacementIdentityError::ReservedDomain => reserved_domain_response(),
+        PlacementIdentityError::PartialContext => error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_placement",
+            "placement-контекст частичный: DOMAIN и USER_ID передаются вместе \
+             (или не передаются вовсе — тогда это dev-режим)",
+        ),
+        PlacementIdentityError::Oversized => error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_placement",
+            "значение DOMAIN/USER_ID слишком длинное",
+        ),
+    }
+}
+
 // --- Хендлеры ---
 
 /// `GET /v1/onboarding/state` — upsert org+user по placement-контексту и
@@ -549,12 +616,14 @@ async fn onboarding_state(
             return Err(error_response(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "invalid_query",
-                format!("query-параметры не читаются: {}", rejection.body_text()),
+                format!(
+                    "query-параметры не читаются: {}",
+                    echo(rejection.body_text().as_str())
+                ),
             ));
         }
     };
-    let identity =
-        PlacementIdentity::from_params(&params).map_err(|_| reserved_domain_response())?;
+    let identity = PlacementIdentity::from_params(&params).map_err(placement_error_response)?;
     let org_id = budgeted_sqlx(state.perimeter.ensure_organization(&identity.member_id)).await?;
     let user_id = budgeted_sqlx(state.perimeter.ensure_user(org_id, &identity.user_ref)).await?;
     let verdict = budgeted_store(state.perimeter.load_verdict(user_id)).await?;
@@ -582,7 +651,10 @@ async fn perimeter_verdict(
             return Err(error_response(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "invalid_query",
-                format!("query-параметры не читаются: {}", rejection.body_text()),
+                format!(
+                    "query-параметры не читаются: {}",
+                    echo(rejection.body_text().as_str())
+                ),
             ));
         }
     };
@@ -590,14 +662,16 @@ async fn perimeter_verdict(
         error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_body",
-            format!("тело запроса не читается: {}", rejection.body_text()),
+            format!(
+                "тело запроса не читается: {}",
+                echo(rejection.body_text().as_str())
+            ),
         )
     })?;
     // Валидация до каких-либо касаний БД: 422 не создаёт сущностей и
     // работает даже в деградации (маршруты живы).
     let answers = answers_from_request(body).map_err(validation_response)?;
-    let identity =
-        PlacementIdentity::from_params(&params).map_err(|_| reserved_domain_response())?;
+    let identity = PlacementIdentity::from_params(&params).map_err(placement_error_response)?;
     let org_id = budgeted_sqlx(state.perimeter.ensure_organization(&identity.member_id)).await?;
     let user_id = budgeted_sqlx(state.perimeter.ensure_user(org_id, &identity.user_ref)).await?;
     let verdict = decide_verdict(&answers);
@@ -721,16 +795,50 @@ mod tests {
         }
 
         #[test]
-        fn partial_context_falls_back_to_dev() {
-            // Только DOMAIN или только USER_ID не идентифицируют пользователя.
+        fn partial_context_is_rejected() {
+            // Частичный контекст не идентифицирует пользователя и не должен
+            // молча превращать реальный портал в dev-фикстуру (ревью 1.2).
             let only_domain =
                 PlacementIdentity::from_params(&params(&[("DOMAIN", "shop.example")]))
-                    .expect("частичный контекст — фоллбэк, не ошибка");
-            assert!(only_domain.is_dev_fallback());
+                    .expect_err("DOMAIN без USER_ID — отказ");
+            assert_eq!(only_domain, PlacementIdentityError::PartialContext);
 
             let only_user = PlacementIdentity::from_params(&params(&[("USER_ID", "42")]))
-                .expect("частичный контекст — фоллбэк, не ошибка");
-            assert!(only_user.is_dev_fallback());
+                .expect_err("USER_ID без DOMAIN — отказ");
+            assert_eq!(only_user, PlacementIdentityError::PartialContext);
+        }
+
+        #[test]
+        fn oversized_identity_values_are_rejected() {
+            // Краулерский мусор не становится постоянной строкой реестра
+            // (write-on-GET публичен до хендшейка 1.3).
+            let huge_domain = "d".repeat(254);
+            let err = PlacementIdentity::from_params(&params(&[
+                ("DOMAIN", huge_domain.as_str()),
+                ("USER_ID", "42"),
+            ]))
+            .expect_err("домен длиннее DNS-лимита — отказ");
+            assert_eq!(err, PlacementIdentityError::Oversized);
+
+            let huge_user = "u".repeat(65);
+            let err = PlacementIdentity::from_params(&params(&[
+                ("DOMAIN", "shop.example"),
+                ("USER_ID", huge_user.as_str()),
+            ]))
+            .expect_err("USER_ID длиннее 64 — отказ");
+            assert_eq!(err, PlacementIdentityError::Oversized);
+        }
+
+        #[test]
+        fn domain_trailing_dot_is_canonicalized() {
+            // Вариант FQDN того же портала не должен плодить дубликат
+            // организации (знаменатель UJ-1).
+            let identity = PlacementIdentity::from_params(&params(&[
+                ("DOMAIN", "shop.example."),
+                ("USER_ID", "42"),
+            ]))
+            .expect("валидный контекст");
+            assert_eq!(identity.member_id, "shop.example");
         }
 
         #[test]
@@ -743,10 +851,19 @@ mod tests {
             assert_eq!(identity.member_id, "shop.example");
             assert_eq!(identity.user_ref, "42");
 
-            let blank =
-                PlacementIdentity::from_params(&params(&[("DOMAIN", "   "), ("USER_ID", "42")]))
+            // Оба значения пусты после trim — placement-контекст отсутствует:
+            // документированный dev-фоллбэк.
+            let blank_both =
+                PlacementIdentity::from_params(&params(&[("DOMAIN", "   "), ("USER_ID", "   ")]))
                     .expect("пустой контекст — фоллбэк");
-            assert!(blank.is_dev_fallback());
+            assert!(blank_both.is_dev_fallback());
+
+            // Пустой DOMAIN при заданном USER_ID — частичный контекст:
+            // отказ, а не тихая запись реального портала в фикстуру (ревью 1.2).
+            let blank_domain =
+                PlacementIdentity::from_params(&params(&[("DOMAIN", "   "), ("USER_ID", "42")]))
+                    .expect_err("частичный контекст — отказ");
+            assert_eq!(blank_domain, PlacementIdentityError::PartialContext);
         }
     }
 
@@ -879,6 +996,18 @@ mod tests {
             assert!(answers.marketplaces.is_empty());
             assert_eq!(decide_verdict(&answers), Verdict::NonSeller);
         }
+
+        #[test]
+        fn non_seller_marketplaces_are_discarded_without_validation() {
+            // Для не-селлеров список не собирается: мусор в нём не ошибка —
+            // домен нормализует его в пустой (контракт без односторонних 422:
+            // ozon и aliexpress дают одинаковый результат — ревью 1.2).
+            let answers =
+                answers_from_request(request(Some("services_other"), &["aliexpress", ""]))
+                    .expect("не-селлер с мусорным списком валиден");
+            assert!(answers.marketplaces.is_empty());
+            assert_eq!(decide_verdict(&answers), Verdict::NonSeller);
+        }
     }
 
     mod response_shapes {
@@ -984,6 +1113,30 @@ mod tests {
                 validation_response(VerdictValidationError::InvalidTradeModel(huge));
             // Отражение чужого ввода обрезано — мегабайт не возвращается.
             assert!(envelope.error.message.chars().count() < 200);
+        }
+
+        #[test]
+        fn echo_strips_control_characters_from_input() {
+            // Control-символы не попадают в конверт и warn!-лог: подделать
+            // многострочную лог-запись чужим вводом нельзя (ревью 1.2).
+            let (_, Json(envelope)) = validation_response(
+                VerdictValidationError::InvalidTradeModel("bad\nINJECTED\tLOG".to_owned()),
+            );
+            assert!(!envelope.error.message.contains('\n'));
+            assert!(!envelope.error.message.contains('\t'));
+            assert!(envelope.error.message.contains("badINJECTEDLOG"));
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn budgeted_store_times_out_to_503_envelope() {
+            // Зависший стор (не отказ, а молчание) обязан уйти в бюджет:
+            // просрочка → 503-конверт database_unavailable (ревью 1.2).
+            let never: std::future::Pending<Result<i32, StoreError>> = std::future::pending();
+            let Err((status, Json(envelope))) = budgeted_store(never).await else {
+                panic!("зависшая операция обязана завершиться таймаутом бюджета");
+            };
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(envelope.error.code, "database_unavailable");
         }
 
         #[test]

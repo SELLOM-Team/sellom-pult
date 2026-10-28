@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-10-28'
 status: 'done'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 baseline_commit: '2e02d8f'
 story_key: '1-2-шаг-0-фильтр-периметра-ваш-бизнес'
 context:
@@ -94,6 +94,7 @@ context:
 - CI integration: +3 шага e2e шага 0 (селлер: state→verdict→funnel→иммутабельность; не-селлер: exit_screen; валидация 422 + метрика installs=2/completed=2/sellers=1/share=1.0 — dev-фоллбэк и sentinel-строка b24_member_id NULL не считаются). Прогон — на push (внешняя верификация).
 
 ## Spec Change Log
+- 2026-10-29, оркестратор (формальный bmad-code-review, 4 слоя): 25 находок → 15 патч-групп применены (бюджет 2с + тест таймаута; CI: 404/405/reserved, живой dev-фоллбэк, repeat-POST обеих веток, --max-time; placement: лимиты 253/64 + частичный контекст → 422 invalid_placement + канонизация точки; echo-гигиена; clearTimeout покрывает тело; тест таймаута SPA; CHECK trade_model; валидация площадок только для селлеров; копирайт-честность + README-коды). 1 defer (React-компонентные тесты), 6 отклонено с доказательствами. review_loop_iteration 0 → 1. AC-нарушений не найдено (acceptance-auditor).
 - 2026-10-28, оркестратор (ревью-патчи, шаг 04): 22 группы применены (таблица выше). Ключевое: таймауты (клиент 8с / стор 5с) — зависание больше не «вечный скелетон»; валидация площадок закрытым списком; dev-portal — единственная константа (bind) + CI реально создаёт dev-фоллбэк и проверяет исключение из метрик; деградация /v1 закреплена в CI; 404/405 под конвертом; канонизация DOMAIN; чистые функции screenStateFromError/step0 с тестами. СРЕДА: окружение сессии частично умирало (~16:10 UTC+8) — ~/.cargo и ~/.rustup исчезли, node_modules SPA снесён, _bmad/render и tool-results стёрты; восстановлено: rustup 1.99.1 (rustfmt+clippy), npm ci, re-render скилла. Урок: целевые каталоги вне Git-репо не переживают сброс среды — репо единственная константа (подтверждение Директивы 3).
 
 
@@ -132,6 +133,46 @@ context:
 | 27 | blind | ports.rs | save_verdict принимает и answers, и verdict (избыточность) | false | отклонено: единственный вызов консистентен по построению (decide_verdict в хендлере); расходящегося вызывающего нет |
 
 Патчи применены + полная верификация: 57 Rust-тестов (identity 5, gateway 32 [+6], platform 20), 54 SPA-теста (api 20, appState 17 [+5], step0 5 [новые], b24 7, health 5), гейты hexagonal/valkey/bundle PASS (72 318 Б gzip), живьём: reserved_member_id 422 / 404 и 405 конверты / деградация /v1, fmt/clippy чисто, YAML валиден. CI-прогон — внешний (push).
+
+## Review Findings (формальный bmad-code-review, 2026-10-29)
+
+Ревью 4 слоями (blind-hunter 16 / edge-case-hunter 9 / verification-gap 5 [pre-verified] / acceptance-auditor: 0 нарушений AC + 5 наблюдений) → 25 уникальных находок → триаж по коду: **15 patch (применены) / 1 defer / 6 rejected / 3 слияния дубликатов**. Владелец делегировал применение патчей (прецедент 1.1).
+
+### Patch (применены и верифицированы)
+
+- [x] [Review][Patch] Бюджет БД 5с→2с: хендлер цепляет до 3 последовательных операций × 5с = 15с > 8с клиента — офлайн раньше честного 503 [pult/gateway/src/onboarding.rs]
+- [x] [Review][Patch] Юнит-тест таймаут-ветки бюджета: зависший стор (pending-future, tokio start_paused) → 503-конверт; CI-стоп-PG — быстрый отказ и ветку не покрывает [pult/gateway/src/onboarding.rs, Cargo.toml dev-dep tokio/test-util]
+- [x] [Review][Patch] CI: 404/405/reserved_member_id без ассертов — удаление фолбэков не роняет ни один тест [github/workflows/ci.yml]
+- [x] [Review][Patch] CI: dev-фоллбэк проверялся пробой с выброшенным ответом (-o /dev/null) — успешный путь (200 + step0_required + строка dev-portal в БД) не подтверждался [github/workflows/ci.yml]
+- [x] [Review][Patch] Нет лимитов длины DOMAIN/USER_ID: мегабайтный мусор краулеров становится постоянной строкой реестра (write-on-GET публичен до 1.3) → 422 invalid_placement (253/64) [pult/gateway/src/onboarding.rs]
+- [x] [Review][Patch] Частичный контекст (DOMAIN без USER_ID) молча уходил в dev-фикстуру — реальный портал сливается с общей идентичностью dev-user → 422 invalid_placement (честная диагностика) [pult/gateway/src/onboarding.rs]
+- [x] [Review][Patch] Канонизация DOMAIN без хвостовой точки FQDN — варианты портала плодят дубли организаций (знаменатель UJ-1) [pult/gateway/src/onboarding.rs]
+- [x] [Review][Patch] Эхо чужого ввода без фильтра control-символов — подделка многострочных лог-записей через warn!; rejection-тексты invalid_query/invalid_body без капа [pult/gateway/src/onboarding.rs]
+- [x] [Review][Patch] Клиентский бюджет покрывал только заголовки: clearTimeout до response.json() — шлюз, замолчавший посреди тела, вешал вечный скелетон [pult/shells/bitrix24/src/api.ts]
+- [x] [Review][Patch] Таймаут-путь клиента без регрессионного теста (AbortController-abort → network_error проверялся только TypeError-стабом) [pult/shells/bitrix24/src/api.test.ts]
+- [x] [Review][Patch] Миграция 0005: trade_model без CHECK при CHECK на verdict — мусорные значения хранимы на уровне БД (класс повреждения, который ловит CorruptVerdict) [pult/db/migrations/0005_perimeter_verdicts.sql, in-place — постоянных развёртываний нет]
+- [x] [Review][Patch] Валидация площадок для не-селлеров давала односторонний контракт: ozon в списке проходит (выбрасывается), aliexpress — 422, при одинаковом результате [pult/gateway/src/onboarding.rs]
+- [x] [Review][Patch] CI: повторный POST селлера ассертил только verdict (без state), повторный POST не-селлера не проверялся вовсе [github/workflows/ci.yml]
+- [x] [Review][Patch] CI: curl без --max-time — шлюз, принимающий соединение без ответа, вешает джобу до таймаута [github/workflows/ci.yml]
+- [x] [Review][Patch] Честность копирайта: «напишите нам» без канала → партнёр/поддержка Б24; ЯМ в вопроснике, но периметр в копирайте только WB/Ozon → «Яндекс Маркет — следом» [pult/shells/bitrix24/src/screens/ExitScreen.tsx, ConnectionStatus.tsx]; README: internal_error и invalid_placement в списке кодов [pult/README.md]
+
+### Defer
+
+- [x] [Review][Defer] Ноль React-компонентных тестов (Questionnaire-флоу, роутинг-эффект App, рендер экранов) [pult/shells/bitrix24/src] — deferred: нужна инфраструктура RTL+jsdom (новые devDeps); паттерн «логика в чистых функциях» компенсирует часть риска; закрытие — виджет 1.8 / Epic 2 hardening (deferred-work.md).
+
+### Rejected (приложение)
+
+- request_id отбрасывается клиентом (parseErrorEnvelope) — отклонено: в Ф0 нет канала поддержки, куда пользователь цитирует ID; серверные warn!-логи уже коррелируют; фикс = новая поверхность API/UI ради неиспользуемого поля.
+- E2E-ассерты для unknown_marketplace/invalid_marketplaces — отклонено: классификация покрыта юнит-тестами, машинерия 422 уже прогоняется e2e через 2 других кода.
+- Кнопка «Повторить» на детерминированных 422 (reserved_member_id) — отклонено: доминирующий error-кейс = 503 (повтор осмыслен); reserved-литерал в реальных порталах недостижим; фикс = лишняя ветка UI.
+- Спецификация status:done при спринт-статусе review — отклонено (false): документированное переходное состояние workflow (спека закрывается на шаге 05 build, спринт — формальным ревью; этим прогоном и закрыто).
+- Дубликаты query-ключей DOMAIN/USER_ID молча берут последнее — отклонено: placement-URL генерирует сервер Б24; подделка внутри iframe бессмысленна до хендшейка 1.3 (настоящий фикс).
+- Сырые 431/413/400 от hyper/axum до роутера вне конверта — отклонено: транспортный слой вне контракта приложения; бытовые запросы на порядки меньше лимитов; фикс = guard-слой.
+
+### Верификация после патчей
+
+62 Rust-теста (identity 5, gateway 37 [+5], platform 20) + 55 SPA (api 21 [+1: таймаут], appState 17, step0 5, b24 7, health 5); fmt/clippy -D warnings чисто; гейты PASS (72 568 Б gzip < 200 000); живьём: reserved 422 / invalid_placement 422 / 404 / 405 конверты / деградация /v1 с бюджетом (~2с до 503-конверта); ci.yml YAML валиден. Внешняя верификация: CI-прогон на push (GitHub). СБОЙ СРЕДЫ повторился во время ревью (~11:35 UTC+8 29.10): ~/.cargo и ~/.rustup стёрты — восстановлены rustup 1.99.1 + clippy/rustfmt (урок спеки подтверждён: репо — единственная константа).
+
 ## Design Notes
 
 - Реестр установок: organizations.b24_member_id (UNIQUE, nullable) — реальная установка Б24 отразится здесь при ONAPPINSTALL (1.3+); в 1.2 строка создаётся первым placement-запросом (документированная аппроксимация «установки» для Ф0-пилотов).

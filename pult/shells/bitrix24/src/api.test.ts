@@ -178,6 +178,32 @@ describe('fetchOnboardingState', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).code).toBe('network_error')
   })
+
+  it('бюджет 8с: шлюз принял соединение и молчит → network_error (AbortController)', async () => {
+    // Регрессия заголовочного поведения (ревью 1.2: зависший шлюз — офлайн,
+    // не вечный скелетон): fetch никогда не отвечает сам — abort по таймеру
+    // обязан отвергнуть запрос с network_error.
+    vi.useFakeTimers()
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_url: string | URL | Request, init?: RequestInit) =>
+            new Promise<never>((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () =>
+                reject(new DOMException('The operation was aborted', 'AbortError')),
+              )
+            }),
+        ),
+      )
+      const pending = fetchOnboardingState(ctx)
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'network_error' })
+      await vi.advanceTimersByTimeAsync(8000)
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('submitVerdict', () => {

@@ -136,35 +136,40 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
       'network_error',
       'шлюз недоступен: сеть или сервер не отвечает (или превысен бюджет запроса)',
     )
+  }
+  // Бюджет покрывает и чтение тела, а не только заголовки (формальное ревью
+  // Story 1.2): шлюз, отправивший заголовки и замолчавший посреди тела,
+  // тоже уходит в network_error, а не висит вечным скелетоном.
+  try {
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!contentType.toLowerCase().includes('json')) {
+      throw new ApiError(
+        'invalid_response',
+        `шлюз ответил не-JSON (HTTP ${response.status})`,
+        response.status,
+      )
+    }
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch {
+      throw new ApiError('invalid_response', 'шлюз ответил битым JSON', response.status)
+    }
+    if (!response.ok) {
+      const envelope = parseErrorEnvelope(body)
+      if (envelope) {
+        throw new ApiError(envelope.code, envelope.message, response.status)
+      }
+      throw new ApiError(
+        'invalid_response',
+        `шлюз ответил ошибкой без конверта (HTTP ${response.status})`,
+        response.status,
+      )
+    }
+    return body
   } finally {
     clearTimeout(timer)
   }
-  const contentType = response.headers.get('content-type') ?? ''
-  if (!contentType.toLowerCase().includes('json')) {
-    throw new ApiError(
-      'invalid_response',
-      `шлюз ответил не-JSON (HTTP ${response.status})`,
-      response.status,
-    )
-  }
-  let body: unknown
-  try {
-    body = await response.json()
-  } catch {
-    throw new ApiError('invalid_response', 'шлюз ответил битым JSON', response.status)
-  }
-  if (!response.ok) {
-    const envelope = parseErrorEnvelope(body)
-    if (envelope) {
-      throw new ApiError(envelope.code, envelope.message, response.status)
-    }
-    throw new ApiError(
-      'invalid_response',
-      `шлюз ответил ошибкой без конверта (HTTP ${response.status})`,
-      response.status,
-    )
-  }
-  return body
 }
 
 /** GET /v1/onboarding/state — состояние шага 0 для пользователя placement-контекста. */

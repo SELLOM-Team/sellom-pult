@@ -66,13 +66,19 @@ curl -s localhost:8080/ready    # {"status":"ready",...,"migrations_applied":tru
 
 Идентичность — только из placement-параметров Б24 (`DOMAIN`, `USER_ID`);
 без них — документированный dev-фоллбэк `dev-portal`/`dev-user`, исключаемый
-из метрик. Реальная проверка подписи/хендшейка — Story 1.3.
+из метрик. Частичный контекст (DOMAIN без USER_ID или наоборот) и
+сверхдлинные значения (> 253 / > 64 символов) — 422 `invalid_placement`:
+реальный портал не сливается с dev-фикстурой, краулерский мусор не попадает
+в реестр. DOMAIN канонизируется (нижний регистр, без хвостовой точки).
+Реальная проверка подписи/хендшейка — Story 1.3.
 
 Коды ошибок контрактов `/v1` (конверт `{error:{code,message,request_id,details}}`):
 `invalid_trade_model` / `marketplaces_required` / `invalid_marketplaces` /
-`unknown_marketplace` (422 — ошибки ответов шага 0), `invalid_body` /
-`invalid_query` (422 — неразборчивый запрос), `reserved_member_id` (422 —
-DOMAIN=dev-portal), `database_unavailable` (503 — деградация), `not_found` /
+`unknown_marketplace` / `invalid_placement` (422 — ошибки ответов шага 0 и
+placement-контекста: частичный контекст либо сверхдлинные DOMAIN/USER_ID),
+`invalid_body` / `invalid_query` (422 — неразборчивый запрос), `reserved_member_id`
+(422 — DOMAIN=dev-portal), `database_unavailable` (503 — деградация),
+`internal_error` (500 — повреждённая строка вердикта), `not_found` /
 `method_not_allowed` (404/405 — неизвестный маршрут/метод).
 
 Семантика счётчиков: «установка» = организация с `b24_member_id` (до 1.3 —

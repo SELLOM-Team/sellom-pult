@@ -253,7 +253,7 @@ jobs:
       - name: /health → 200 (после применения миграций)
         run: |
           for i in $(seq 1 60); do
-            code=$(curl -s -o /tmp/health-ok.json -w '%{http_code}' http://localhost:8080/health || true)
+            code=$(curl -s --max-time 10 -o /tmp/health-ok.json -w '%{http_code}' http://localhost:8080/health || true)
             body=$(cat /tmp/health-ok.json 2>/dev/null || true)
             echo "попытка $i: /health → $code $body"
             if [ "$code" = "200" ] && echo "$body" | grep -q '"status":"ok"'; then exit 0; fi
@@ -263,7 +263,7 @@ jobs:
       - name: /ready → 200
         run: |
           for i in $(seq 1 30); do
-            code=$(curl -s -o /tmp/ready-ok.json -w '%{http_code}' http://localhost:8080/ready || true)
+            code=$(curl -s --max-time 10 -o /tmp/ready-ok.json -w '%{http_code}' http://localhost:8080/ready || true)
             body=$(cat /tmp/ready-ok.json 2>/dev/null || true)
             echo "попытка $i: /ready → $code $body"
             if [ "$code" = "200" ] && echo "$body" | grep -q '"status":"ready"'; then exit 0; fi
@@ -275,19 +275,19 @@ jobs:
           docker compose -f pult/deploy/docker-compose.yml stop postgres
           code=""
           for i in $(seq 1 15); do
-            code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://localhost:8080/health || true)
+            code=$(curl -s --max-time 10 -o /tmp/health.json -w '%{http_code}' http://localhost:8080/health || true)
             echo "попытка $i: /health → $code $(cat /tmp/health.json 2>/dev/null || true)"
             if [ "$code" = "503" ] && grep -q '"status":"degraded"' /tmp/health.json; then break; fi
             sleep 2
           done
-          curl -s -o /tmp/ready.json -w '%{http_code}' http://localhost:8080/ready > /tmp/ready.code || true
+          curl -s --max-time 10 -o /tmp/ready.json -w '%{http_code}' http://localhost:8080/ready > /tmp/ready.code || true
           ready_code=$(cat /tmp/ready.code 2>/dev/null || true)
           echo "/ready → $ready_code $(cat /tmp/ready.json 2>/dev/null || true)"
           # /v1 в деградации (ревью 1.2): валидация работает без БД (422 до
           # касания БД), состояние — честный 503-конверт, не пустой ответ.
-          v1_code=$(curl -s -o /tmp/v1-deg.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+          v1_code=$(curl -s --max-time 10 -o /tmp/v1-deg.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"wholesale"}' http://localhost:8080/v1/perimeter/verdict || true)
-          state_code=$(curl -s -o /tmp/v1-state.json -w '%{http_code}' http://localhost:8080/v1/onboarding/state || true)
+          state_code=$(curl -s --max-time 10 -o /tmp/v1-state.json -w '%{http_code}' http://localhost:8080/v1/onboarding/state || true)
           # БД возвращается в стек ДО ассертов: провал ассерта (bash -e) не должен
           # обрывать шаг раньше восстановления окружения.
           docker compose -f pult/deploy/docker-compose.yml start postgres
@@ -300,7 +300,7 @@ jobs:
       - name: БД восстановилась → /health снова 200 ok
         run: |
           for i in $(seq 1 30); do
-            code=$(curl -s -o /tmp/health-re.json -w '%{http_code}' http://localhost:8080/health || true)
+            code=$(curl -s --max-time 10 -o /tmp/health-re.json -w '%{http_code}' http://localhost:8080/health || true)
             body=$(cat /tmp/health-re.json 2>/dev/null || true)
             echo "попытка $i: /health → $code $body"
             if [ "$code" = "200" ] && echo "$body" | grep -q '"status":"ok"'; then exit 0; fi
@@ -334,8 +334,8 @@ jobs:
             nohup target/debug/pult-gateway > /tmp/pult-gateway-2.log 2>&1 &
           echo $! > /tmp/pult-gateway.pid
           for i in $(seq 1 30); do
-            hcode=$(curl -s -o /tmp/h2.json -w '%{http_code}' http://localhost:8080/health || true)
-            rcode=$(curl -s -o /tmp/r2.json -w '%{http_code}' http://localhost:8080/ready || true)
+            hcode=$(curl -s --max-time 10 -o /tmp/h2.json -w '%{http_code}' http://localhost:8080/health || true)
+            rcode=$(curl -s --max-time 10 -o /tmp/r2.json -w '%{http_code}' http://localhost:8080/ready || true)
             echo "попытка $i: /health → $hcode $(cat /tmp/h2.json) / /ready → $rcode $(cat /tmp/r2.json)"
             if [ "$hcode" = "200" ] && grep -q '"status":"ok"' /tmp/h2.json \
               && [ "$rcode" = "200" ] && grep -q '"status":"ready"' /tmp/r2.json; then
@@ -350,53 +350,75 @@ jobs:
           base='http://localhost:8080'
           qs='DOMAIN=ci-shop.example&USER_ID=1'
           # Первый вход: вопросник требуется.
-          code=$(curl -s -o /tmp/s0.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          code=$(curl -s --max-time 10 -o /tmp/s0.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
           [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s0.json
           # Ответ селлера → funnel.
-          code=$(curl -s -o /tmp/v0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+          code=$(curl -s --max-time 10 -o /tmp/v0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"marketplace_seller","marketplaces":["wildberries","ozon"]}' \
             "$base/v1/perimeter/verdict?$qs")
           [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v0.json && grep -q '"state":"funnel"' /tmp/v0.json
           # Повторное открытие: вопросник не показывается (per-user запоминание).
-          code=$(curl -s -o /tmp/s1.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          code=$(curl -s --max-time 10 -o /tmp/s1.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
           [ "$code" = "200" ] && grep -q '"state":"funnel"' /tmp/s1.json
           # Иммутабельность: повторный POST с ДРУГИМИ ответами возвращает сохранённый вердикт.
-          code=$(curl -s -o /tmp/v1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+          code=$(curl -s --max-time 10 -o /tmp/v1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"services_other"}' \
             "$base/v1/perimeter/verdict?$qs")
-          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v1.json
+          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v1.json && grep -q '"state":"funnel"' /tmp/v1.json
           echo "селлер-поток шага 0 отработал (вопросник → funnel, вердикт иммутабелен)"
       - name: "шаг 0 (e2e) — не-селлер: отказ и терминальный экран"
         run: |
           base='http://localhost:8080'
           qs='DOMAIN=ci-other.example&USER_ID=7'
-          code=$(curl -s -o /tmp/s2.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          code=$(curl -s --max-time 10 -o /tmp/s2.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
           [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s2.json
-          code=$(curl -s -o /tmp/v2.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+          code=$(curl -s --max-time 10 -o /tmp/v2.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"services_other"}' \
             "$base/v1/perimeter/verdict?$qs")
           [ "$code" = "200" ] && grep -q '"verdict":"non_seller"' /tmp/v2.json && grep -q '"state":"exit_screen"' /tmp/v2.json
-          code=$(curl -s -o /tmp/s3.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
+          code=$(curl -s --max-time 10 -o /tmp/s3.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
           [ "$code" = "200" ] && grep -q '"state":"exit_screen"' /tmp/s3.json
+          # Иммутабельность для не-селлера: повторный POST возвращает сохранённый
+          # вердикт (формальное ревью 1.2: обе ветки вердикта под ассертом).
+          code=$(curl -s --max-time 10 -o /tmp/v3.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"trade_model":"own_channels_no_marketplaces"}' \
+            "$base/v1/perimeter/verdict?$qs")
+          [ "$code" = "200" ] && grep -q '"verdict":"non_seller"' /tmp/v3.json && grep -q '"state":"exit_screen"' /tmp/v3.json
           echo "не-селлер-поток отработал (честный отказ, воронка закрыта)"
       - name: "шаг 0 (e2e) — валидация и метрика (знаменатель активации UJ-1)"
         run: |
           base='http://localhost:8080'
           # Невалидная модель — 422 человекочитаемым конвертом, без касания БД.
-          code=$(curl -s -o /tmp/e0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+          code=$(curl -s --max-time 10 -o /tmp/e0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"wholesale"}' "$base/v1/perimeter/verdict")
           [ "$code" = "422" ] && grep -q '"code":"invalid_trade_model"' /tmp/e0.json
           # Селлерская модель без площадок — 422.
-          code=$(curl -s -o /tmp/e1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+          code=$(curl -s --max-time 10 -o /tmp/e1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"marketplace_planned","marketplaces":[]}' "$base/v1/perimeter/verdict")
           [ "$code" = "422" ] && grep -q '"code":"marketplaces_required"' /tmp/e1.json
+          # Контракт конверта на ЛЮБОМ маршруте (формальное ревью 1.2):
+          # 404/405 тоже под конвертом, резервный DOMAIN — 422 до касания БД.
+          code=$(curl -s --max-time 10 -o /tmp/nf.json -w '%{http_code}' "$base/v1/nope")
+          [ "$code" = "404" ] && grep -q '"code":"not_found"' /tmp/nf.json
+          code=$(curl -s --max-time 10 -o /tmp/mna.json -w '%{http_code}' "$base/v1/perimeter/verdict")
+          [ "$code" = "405" ] && grep -q '"code":"method_not_allowed"' /tmp/mna.json
+          code=$(curl -s --max-time 10 -o /tmp/rv.json -w '%{http_code}' "$base/v1/onboarding/state?DOMAIN=dev-portal&USER_ID=1")
+          [ "$code" = "422" ] && grep -q '"code":"reserved_member_id"' /tmp/rv.json
           # Метрика: 2 установки (ci-shop + ci-other), обе прошли шаг 0, 1 селлер.
           # dev-фоллбэк реально создаётся запросом без placement-параметров и
           # НЕ меняет счётчики (исключение фиксируется этим же ассертом);
           # sentinel-строка (b24_member_id IS NULL) тоже не считается.
           # grep-якоря «значение,» отсекают ложные совпадения префиксом.
-          curl -s -o /dev/null "$base/v1/onboarding/state"
-          code=$(curl -s -o /tmp/m0.json -w '%{http_code}' "$base/v1/metrics/perimeter")
+          # dev-фоллбэк не только не ломает метрику — он реально создаётся
+          # (200 + вопросник) и виден в реестре (формальное ревью 1.2:
+          # проба с выброшенным ответом проверяла только половину контракта).
+          code=$(curl -s --max-time 10 -o /tmp/dev0.json -w '%{http_code}' "$base/v1/onboarding/state")
+          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/dev0.json
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -tAc \
+            "SELECT count(*) FROM organizations WHERE b24_member_id = 'dev-portal'" \
+            | grep -qx '1'
+          code=$(curl -s --max-time 10 -o /tmp/m0.json -w '%{http_code}' "$base/v1/metrics/perimeter")
           [ "$code" = "200" ] \
             && grep -q '"installs":2,' /tmp/m0.json \
             && grep -q '"step0_completed":2,' /tmp/m0.json \
