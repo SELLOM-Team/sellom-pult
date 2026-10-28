@@ -116,18 +116,31 @@ function parsePerimeterMetrics(body: unknown): PerimeterMetrics {
 }
 
 /**
- * Выполняет запрос к шлюзу с бюджетом времени и возвращает разобранное
+ * Бюджет POST /v1/connections: сервер может гонять до 2 проб × 10с
+ * (PROBE_TIMEOUT) последовательно + БД — клиентский бюджет обязан покрывать
+ * худший случай, иначе честный probe_unavailable не доедет до шага 3
+ * (ревью Story 1.3: рассинхрон бюджетов = ложный network_error).
+ */
+export const CONNECT_TIMEOUT_MS = 30000
+
+const REQUEST_TIMEOUT_MS = 8000
+
+/**
+ * Выполняет запрос к шлюзу с бюджетом времени (по умолчанию 8с, для
+ * долгих операций — свой бюджет параметром) и возвращает разобранное
  * JSON-тело успешного ответа. Таймаут обязателен (ревью Story 1.2):
  * зависший шлюз — это офлайн, а не вечный скелетон. Любая ошибка —
  * ApiError: network_error (нет сети/сервера/просрочен бюджет),
  * invalid_response (не-JSON/битый JSON/ошибка без конверта) либо код
  * error-конверта шлюза (например, database_unavailable при 503).
  */
-const REQUEST_TIMEOUT_MS = 8000
-
-async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
+async function requestJson(
+  url: string,
+  init?: RequestInit,
+  budgetMs: number = REQUEST_TIMEOUT_MS,
+): Promise<unknown> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), budgetMs)
   let response: Response
   try {
     response = await fetch(url, { ...init, signal: controller.signal })
@@ -200,4 +213,127 @@ export async function submitVerdict(
 /** GET /v1/metrics/perimeter — доля установок, прошедших шаг 0 (без PII). */
 export async function fetchPerimeterMetrics(): Promise<PerimeterMetrics> {
   return parsePerimeterMetrics(await requestJson('/v1/metrics/perimeter'))
+}
+
+// --- Подключения площадок (Story 1.3, token-vault) ---
+
+/** Площадка подключения (Ф0: две; маппинг в enum — на шлюзе). */
+export type MarketplaceId = 'wildberries' | 'ozon'
+
+/** Проверка одного права в автотесте (hint — только при отказе). */
+export interface RightsCheck {
+  name: string
+  ok: boolean
+  hint?: string
+}
+
+/** Строка GET /v1/connections — статус площадки БЕЗ секретов. */
+export interface ConnectionInfo {
+  marketplace: MarketplaceId
+  schemes: string[]
+  status: 'verified' | 'rejected' | 'probe_unavailable'
+  verified_at: string | null
+  client_id: string | null
+  rights: RightsCheck[]
+}
+
+/** Разбор GET /v1/connections: чужая форма элемента — ошибка. */
+export function parseConnections(body: unknown): ConnectionInfo[] {
+  const list = (body as { connections?: unknown } | null | undefined)?.connections
+  if (!Array.isArray(list)) {
+    throw new ApiError('invalid_response', 'шлюз вернул список подключений неожиданной формы')
+  }
+  // Контракт статусов домена: в 1.3 пишется только verified, но rejected /
+  // probe_unavailable допустимы схемой БД и status_from_str — парсер обязан
+  // принимать все три, иначе одна будущая строка роняет весь список
+  // (ревью Story 1.3).
+  const STATUSES = ['verified', 'rejected', 'probe_unavailable'] as const
+  return list.map((item) => {
+    const row = item as Record<string, unknown>
+    const marketplace = row.marketplace
+    const status = row.status
+    if (
+      (marketplace === 'wildberries' || marketplace === 'ozon') &&
+      (STATUSES as readonly unknown[]).includes(status) &&
+      Array.isArray(row.schemes) &&
+      Array.isArray(row.rights) &&
+      typeof row.verified_at !== 'number'
+    ) {
+      return {
+        marketplace,
+        schemes: row.schemes as string[],
+        status: status as ConnectionInfo['status'],
+        verified_at: (row.verified_at as string | null) ?? null,
+        client_id: (row.client_id as string | null) ?? null,
+        rights: row.rights as RightsCheck[],
+      }
+    }
+    throw new ApiError('invalid_response', 'шлюз вернул подключение неожиданной формы')
+  })
+}
+
+/** Итог автотеста прав POST /v1/connections (права — только при verified). */
+export type ConnectOutcome =
+  | { status: 'verified'; rights: RightsCheck[] }
+  | { status: 'rejected' | 'probe_unavailable'; checks: RightsCheck[] }
+
+/** Разбор POST /v1/connections: статусы и форма прав консистентны. */
+export function parseConnectOutcome(body: unknown): ConnectOutcome {
+  const row = body as Record<string, unknown> | null | undefined
+  const checksOf = (value: unknown): RightsCheck[] =>
+    Array.isArray(value) ? (value as RightsCheck[]) : []
+  if (row?.status === 'verified') {
+    return { status: 'verified', rights: checksOf(row.rights) }
+  }
+  if (row?.status === 'rejected' || row?.status === 'probe_unavailable') {
+    return { status: row.status, checks: checksOf(row.checks) }
+  }
+  throw new ApiError('invalid_response', 'шлюз вернул итог автотеста неожиданной формы')
+}
+
+/** GET /v1/connections — статусы подключений портала (без секретов). */
+export async function fetchConnections(ctx: B24PlacementContext): Promise<ConnectionInfo[]> {
+  const query = identityQuery(ctx)
+  return parseConnections(await requestJson(`/v1/connections${query ? `?${query}` : ''}`))
+}
+
+/**
+ * POST /v1/connections — автотест прав и сохранение при успехе (шаги 2–3
+ * мастера). Токен передаётся только в теле запроса (TLS) и никогда не
+ * возвращается: ответы содержат только права/диагностику.
+ */
+export async function connectMarketplace(
+  ctx: B24PlacementContext,
+  payload: {
+    marketplace: MarketplaceId
+    schemes: string[]
+    token: string
+    client_id?: string
+  },
+): Promise<ConnectOutcome> {
+  const query = identityQuery(ctx)
+  // Бюджет покрывает худший случай сервера (2 пробы × 10с + БД) — см.
+  // CONNECT_TIMEOUT_MS; общий 8с оборвал бы честный probe_unavailable.
+  return parseConnectOutcome(
+    await requestJson(
+      `/v1/connections${query ? `?${query}` : ''}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      CONNECT_TIMEOUT_MS,
+    ),
+  )
+}
+
+/** DELETE /v1/connections/{marketplace} — отзыв токена (удаление строки). */
+export async function deleteConnection(
+  ctx: B24PlacementContext,
+  marketplace: MarketplaceId,
+): Promise<void> {
+  const query = identityQuery(ctx)
+  await requestJson(`/v1/connections/${marketplace}${query ? `?${query}` : ''}`, {
+    method: 'DELETE',
+  })
 }

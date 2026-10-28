@@ -42,5 +42,11 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# --- Story 1.3 (token-vault, AD-16) — только шлюз ---
+# AES-256-GCM (RustCrypto): шифротекст токенов; nonce генерируется на запись.
+aes-gcm = "0.10.3"
+# Пробы прав площадок: rustls (без openssl), json; дефолт-фичи отключены.
+reqwest = { version = "0.12", default-features = false }
+
 [profile.release]
 lto = "thin"

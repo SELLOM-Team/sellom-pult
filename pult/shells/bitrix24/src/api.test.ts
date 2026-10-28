@@ -2,9 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { B24PlacementContext } from './b24'
 import {
   ApiError,
+  CONNECT_TIMEOUT_MS,
+  connectMarketplace,
+  fetchConnections,
+  deleteConnection,
   fetchOnboardingState,
   fetchPerimeterMetrics,
   identityQuery,
+  parseConnections,
+  parseConnectOutcome,
   parseErrorEnvelope,
   parseOnboardingState,
   parseVerdictResponse,
@@ -291,5 +297,183 @@ describe('fetchPerimeterMetrics', () => {
     const err = await fetchPerimeterMetrics().catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).code).toBe('invalid_response')
+  })
+})
+
+describe('parseConnections — список подключений без секретов', () => {
+  it('валидный список разбирается', () => {
+    const rows = parseConnections({
+      connections: [
+        {
+          marketplace: 'wildberries',
+          schemes: ['fbo', 'fbs'],
+          status: 'verified',
+          verified_at: '2026-10-29T00:00:00+00:00',
+          client_id: null,
+          rights: [{ name: 'Статистика', ok: true }],
+        },
+        {
+          marketplace: 'ozon',
+          schemes: ['fbo'],
+          status: 'verified',
+          verified_at: null,
+          client_id: '42',
+          rights: [],
+        },
+      ],
+    })
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.marketplace).toBe('wildberries')
+    expect(rows[1]?.client_id).toBe('42')
+  })
+
+  it('пустой список валиден (портал без подключений)', () => {
+    expect(parseConnections({ connections: [] })).toEqual([])
+  })
+
+  it('чужая форма — invalid_response', () => {
+    expect(() => parseConnections(null)).toThrowError(ApiError)
+    expect(() => parseConnections({ nope: true })).toThrowError(ApiError)
+    expect(() =>
+      parseConnections({ connections: [{ marketplace: 'aliexpress', status: 'verified' }] }),
+    ).toThrowError(ApiError)
+  })
+})
+
+describe('parseConnectOutcome — итог автотеста прав', () => {
+  it('verified → права', () => {
+    const outcome = parseConnectOutcome({
+      status: 'verified',
+      rights: [{ name: 'Статистика', ok: true }],
+    })
+    expect(outcome).toEqual({ status: 'verified', rights: [{ name: 'Статистика', ok: true }] })
+  })
+
+  it('rejected/probe_unavailable → диагностика', () => {
+    const rejected = parseConnectOutcome({
+      status: 'rejected',
+      checks: [{ name: 'Цены и скидки', ok: false, hint: 'пересоздайте токен' }],
+    })
+    expect(rejected.status).toBe('rejected')
+    const unavailable = parseConnectOutcome({ status: 'probe_unavailable', checks: [] })
+    expect(unavailable.status).toBe('probe_unavailable')
+  })
+
+  it('чужая форма — invalid_response', () => {
+    expect(() => parseConnectOutcome({ status: 'секрет' })).toThrowError(ApiError)
+    expect(() => parseConnectOutcome(null)).toThrowError(ApiError)
+  })
+})
+
+describe('connectMarketplace / deleteConnection — контракт 1.3', () => {
+  it('POST уходит с identity-query и телом без изменений формы', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ status: 'verified', rights: [{ name: 'Статистика', ok: true }] }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const outcome = await connectMarketplace(ctx, {
+      marketplace: 'wildberries',
+      schemes: ['fbo', 'fbs'],
+      token: 'wb-secret',
+    })
+    expect(outcome.status).toBe('verified')
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(String(url)).toBe('/v1/connections?DOMAIN=shop.example&USER_ID=42&PLACEMENT=DEFAULT')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      marketplace: 'wildberries',
+      schemes: ['fbo', 'fbs'],
+      token: 'wb-secret',
+    })
+  })
+
+  it('DELETE без тела; секрет не возвращается ответом', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ status: 'deleted' }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(deleteConnection(devCtx, 'ozon')).resolves.toBeUndefined()
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(String(url)).toBe('/v1/connections/ozon')
+    expect(init.method).toBe('DELETE')
+  })
+})
+
+describe('fetchConnections — единственный GET-клиент 1.3 обязан иметь URL-тест (ревью 1.3)', () => {
+  it('GET с identity-query', async () => {
+    const fetchMock = vi.fn(
+      async (_url?: string | URL | Request, _init?: RequestInit) =>
+        jsonResponse({
+          connections: [
+          {
+            marketplace: 'wildberries',
+            schemes: ['fbo'],
+            status: 'verified',
+            verified_at: '2026-10-29T00:00:00+00:00',
+            client_id: null,
+            rights: [],
+          },
+          ],
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchConnections(ctx)).resolves.toHaveLength(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      '/v1/connections?DOMAIN=shop.example&USER_ID=42&PLACEMENT=DEFAULT',
+    )
+  })
+
+  it('dev-контекст → запрос без query', async () => {
+    const fetchMock = vi.fn(
+      async (_url?: string | URL | Request, _init?: RequestInit) =>
+        jsonResponse({ connections: [] }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchConnections(devCtx)).resolves.toEqual([])
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/v1/connections')
+  })
+})
+
+describe('бюджет connectMarketplace покрывает худший случай проб (ревью 1.3)', () => {
+  it('CONNECT_TIMEOUT_MS ≥ 2 × PROBE_TIMEOUT(10с) — честный probe_unavailable доезжает до шага 3', () => {
+    // Серверные пробы: WB = 2 × 10с последовательно (PROBE_TIMEOUT, gateway);
+    // клиентский бюджет обязан быть больше, иначе POST оборвётся
+    // network_error'ом ровно на том пути, ради которого есть probe_unavailable.
+    expect(CONNECT_TIMEOUT_MS).toBeGreaterThanOrEqual(20000)
+  })
+
+  it('успешный POST на 12-й секунде проходит в 30с-бюджете (probe_unavailable доезжает)', async () => {
+    vi.useFakeTimers()
+    try {
+      // Медленный, но успешный ответ (12с > общего 8с, < 30с-бюджета POST):
+      // честный итог автотеста обязан доехать, а не оборваться network_error.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              setTimeout(
+                () =>
+                  resolve(
+                    new Response(JSON.stringify({ status: 'verified', rights: [] }), {
+                      status: 200,
+                      headers: { 'Content-Type': 'application/json' },
+                    }),
+                  ),
+                12000,
+              )
+            }),
+        ),
+      )
+      const pending = connectMarketplace(devCtx, {
+        marketplace: 'ozon',
+        schemes: ['fbo'],
+        token: 'k',
+        client_id: '1',
+      })
+      const assertion = expect(pending).resolves.toMatchObject({ status: 'verified' })
+      await vi.advanceTimersByTimeAsync(12000)
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

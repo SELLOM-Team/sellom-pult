@@ -7,11 +7,17 @@
 //!
 //! Story 1.2: маршруты шага 0 онбординга (фильтр периметра «ваш бизнес»,
 //! FR-1) — модуль [`onboarding`] (`/v1/onboarding/state`,
-//! `/v1/perimeter/verdict`, `/v1/metrics/perimeter`). Семантика `/health` и
-//! `/ready` не меняется (проверено ревью 1.1). Дальнейшая бизнес-логика —
-//! Stories 1.3+ и Epic 2+.
+//! `/v1/perimeter/verdict`, `/v1/metrics/perimeter`).
+//!
+//! Story 1.3: мастер подключения площадок с token-vault (FR-2, AD-16) —
+//! модуль [`connections`] (`/v1/connections`, GET/POST/DELETE) с шифрованием
+//! AES-256-GCM из `PULT_VAULT_MASTER_KEY` и пробами прав API площадок.
+//! Семантика `/health` и `/ready` не меняется (проверено ревью 1.1).
 
+mod connections;
 mod onboarding;
+
+pub(crate) use connections::ConnectionsDeps;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,6 +54,9 @@ struct AppState {
     /// sqlx-стор домена identity: вердикты периметра шага 0 + upsert
     /// org/user по placement-контексту (Story 1.2; порт PerimeterStore).
     perimeter: onboarding::PgPerimeterStore,
+    /// Зависимости подключений площадок (Story 1.3): стор, шифратор,
+    /// проба прав (порт RightsProbe домена identity).
+    connections: ConnectionsDeps,
 }
 
 /// Тело ответа /health и /ready.
@@ -193,10 +202,29 @@ async fn main() {
     tokio::spawn(run_migrations(db.clone(), Arc::clone(&migrations_applied)));
 
     let perimeter_store = onboarding::PgPerimeterStore::new(db.clone());
+
+    // Story 1.3 (token-vault, AD-16): KMS-конверт Ф0 — env-ключ версии 1
+    // (валидация PULT_VAULT_MASTER_KEY — в конфиге: невалидный/отсутствующий
+    // ключ не пускает старт); шифратор и пробы прав — композиция портов.
+    let cipher = Arc::new(connections::EnvAesGcmCipher::new(Arc::new(
+        connections::EnvMasterKeyProvider::new(*config.vault_master_key.as_bytes()),
+    )));
+    let probe = connections::HttpRightsProbe::new(config.probe_override_host.clone())
+        .unwrap_or_else(|err| {
+            error!("HTTP-клиент проб прав не собрался: {err}");
+            std::process::exit(1);
+        });
+    let connections_deps = ConnectionsDeps {
+        store: connections::PgConnectionStore::new(db.clone()),
+        cipher,
+        probe: Arc::new(probe),
+    };
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
         .merge(onboarding::router())
+        .merge(connections::router())
         // Договор об ошибках: любой маршрут отвечает конвертом — и 404/405 тоже
         // (ревью Story 1.2: пустые дефолты axum обходят контракты /v1).
         .fallback(onboarding::not_found)
@@ -206,6 +234,7 @@ async fn main() {
             version,
             migrations_applied,
             perimeter: perimeter_store,
+            connections: connections_deps,
         });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.http_port));

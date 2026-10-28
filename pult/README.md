@@ -94,6 +94,42 @@ placement-контекста: частичный контекст либо св�
 дефолт — каталог партнёров Битрикс24.Маркет). Конкретного партнёра выбирает
 владелец при публикации (критерий рев-шер ≥ 30%).
 
+## Мастер подключения площадок с token-vault (Story 1.3)
+
+Контракты `/v1` (AD-13; ошибки — конверт; идентичность — placement-контекст
+как в шаге 0):
+
+| Метод и путь | Назначение |
+|--------------|-----------|
+| `GET /v1/connections` | статусы подключений обеих площадок **без секретов**: `{connections:[{marketplace, schemes, status, verified_at, client_id, rights}]}`; портал без подключений → пустой список (write-on-GET нет) |
+| `POST /v1/connections` | `{marketplace, schemes, token, client_id?}` → автотест прав пробами API площадки → при `verified` шифротекст в БД; `rejected`/`probe_unavailable` — токен НЕ сохраняется; повторный POST по той же площадке — ротация (перезапись) |
+| `DELETE /v1/connections/{marketplace}` | отзыв токена (удаление строки), идемпотентно |
+
+Тело POST: WB — `{marketplace:"wildberries", schemes:["fbo","fbs","realfbs"], token}`;
+Ozon — `{marketplace:"ozon", schemes:["fbo","fbs","rfbs"], token:<Api-Key>, client_id}`
+(Client-Id — не секрет, хранится открыто). Коды ошибок валидации:
+`unknown_marketplace` / `invalid_schemes` / `invalid_token` / `invalid_client_id`
+(422 — до пробы и БД).
+
+Token-vault (AD-16): токены — только шифротекстом AES-256-GCM (пара bytea
+`token_ciphertext` + `token_nonce`, уникальный nonce на запись, `key_version`);
+plaintext-колонки запрещены CI-гейтом `vault-grep`; токен не попадает в логи
+(только маска последних 4 символов); расшифрование в Ф0 нигде не вызывается
+(write-only vault — потребитель `decrypt` появится в адаптерах Epic 2).
+Мастер-ключ — обязательная переменная `PULT_VAULT_MASTER_KEY` (hex, 64 символа
+= 32 байта; сгенерировать: `openssl rand -hex 32`; без неё шлюз не стартует).
+Подмена хоста проб — переменная `PULT_PROBE_HOST_OVERRIDE` (абсолютный
+http(s)-origin; ТОЛЬКО CI/тесты — в prod конфиг отказывается стартовать).
+
+Пробы прав (веб-верифицировано 29.10.2026): WB — «Статистика»
+(statistics-api.wildberries.ru, GET /api/v1/supplier/stocks?dateFrom=<сегодня>)
+и «Цены и скидки» (discounts-prices-api.wildberries.ru, GET
+/api/v2/list/goods/filter?limit=1); Ozon — POST api-seller.ozon.ru
+/v3/product/list {"limit":1} с заголовками `Client-Id`/`Api-Key`. Живой автотест — внешняя верификация
+(реальные токены, выход в интернет; CI пробы наружу не делает и проверяет
+инвариант «неуспешная проба не сохраняет»). Роль «Владелец» для токенов
+(FR-29) маркируется в UI; серверный enforcement ролей — Story 1.6.
+
 ## SPA (оболочка Битрикс24)
 
 ```bash

@@ -2,7 +2,7 @@
 title: 'Story 1.3 — Мастер подключения площадок с token-vault (шаги 1–3)'
 type: 'feature'
 created: '2026-10-29'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'f456aba'
@@ -64,14 +64,15 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `pult/db/migrations/0006_marketplace_connections.sql` — таблица + триггер updated_at + UNIQUE
-- [ ] `pult/platform/src/config.rs` — PULT_VAULT_MASTER_KEY (валидация hex/32 байта, тесты веток)
-- [ ] `pult/core/identity/src/vault.rs` + `ports.rs` — домен: валидация схем, статусы, права-проверки; порты Cipher/Store/Probe; юнит-тесты правил
-- [ ] `pult/gateway/src/connections.rs` — хендлеры GET/POST/DELETE, PgConnectionStore, EnvAesGcmCipher (aes-gcm crate), HttpRightsProbe (reqwest, rustls, таймаут 10с, без логирования секретов), маски show_last4; тесты: шифрование round-trip, уникальный nonce, валидации, конверты, мок-проба (ok/403/таймаут)
-- [ ] `pult/gateway/src/main.rs` — подключение роутера, конфиг-ключ в AppState
-- [ ] `pult/shells/bitrix24/src/screens/connect/*` — мастер шагов 1–3 + статус на StartConnection; `api.ts` + тесты; чистые функции мастера (валидация форм, состояние шагов) с vitest
-- [ ] `pult/platform/scripts/vault-grep.mjs` — гейт: `token_plaintext`/plaintext-паттерны в db/migrations = exit 1; самотест в CI (PASS + FAIL-направление)
-- [ ] `pult/README.md` — эндпоинты, переменная PULT_VAULT_MASTER_KEY (генерация openssl rand -hex 32), семантика статусов; `.github/workflows/ci.yml` — vault-grep в job gates (PASS+FAIL), CI-ассерты /v1/connections (422; probe_unavailable → GET пусто; DELETE), ключ в шагах запуска шлюза
+- [x] `pult/db/migrations/0006_marketplace_connections.sql` — таблица + триггер updated_at + UNIQUE
+- [x] `pult/platform/src/config.rs` — PULT_VAULT_MASTER_KEY (валидация hex/32 байта, тесты веток)
+- [x] `pult/core/identity/src/vault.rs` + `ports.rs` — домен: валидация схем, статусы, права-проверки; порты Cipher/Store/Probe; юнит-тесты правил
+- [x] `pult/gateway/src/connections.rs` — хендлеры GET/POST/DELETE, PgConnectionStore, EnvAesGcmCipher (aes-gcm crate), HttpRightsProbe (reqwest, rustls, таймаут 10с, без логирования секретов), маски show_last4; тесты: шифрование round-trip, уникальный nonce, валидации, конверты, мок-проба (ok/403/таймаут)
+- [x] `pult/gateway/src/main.rs` — подключение роутера, конфиг-ключ в AppState
+- [x] `pult/shells/bitrix24/src/screens/connect/*` — мастер шагов 1–3 + статус на StartConnection; `api.ts` + тесты; чистые функции мастера (валидация форм, состояние шагов) с vitest
+- [x] `pult/platform/scripts/vault-grep.mjs` — гейт: `token_plaintext`/plaintext-паттерны в db/migrations = exit 1; самотест в CI (PASS + FAIL-направление)
+- [x] `pult/README.md` — эндпоинты, переменная PULT_VAULT_MASTER_KEY (генерация openssl rand -hex 32), семантика статусов; `.github/workflows/ci.yml` — vault-grep в job gates (PASS+FAIL), CI-ассерты /v1/connections (422; probe_unavailable → GET пусто; DELETE), ключ в шагах запуска шлюза
+- [x] Живая проверка шлюза оркестратором: обязательность ключа (чистый exit 1 с инструкцией), 422-валидация без БД/пробы, 503-конверт деградации GET/POST
 - [ ] Live-проба прав — внешняя верификация владельца (реальные токены WB/Ozon; CI наружу не ходит)
 
 **Acceptance Criteria:**
@@ -86,10 +87,19 @@ context:
 
 - Решения при делегировании владельцем (как 1.2): vault — модуль домена identity (7 крейтов спина не расширяется); KMS-конверт Ф0 = порт KeyProvider + env-ключ (YC KMS-адаптер — deferred до провижининга); расшифровка в проде-пути отсутствует (write-only vault); пробная матрица — конфиг-константы с обязательной веб-верификацией эндпоинтов при имплементации (Директива 1; верифицировано 29.10.2026: WB — категории данных токена по dev.wildberries.ru, Ozon — Client-Id/Api-Key по api-seller.ozon.ru).
 - CI не может прогнать живую пробу: e2e внешних вызовов нет — автотест верифицируется моками (юнит) + живьём владельцем. Порядок honest-ответа: сетевые проблемы площадки ≠ отказ прав — отдельный статус probe_unavailable.
+- 2026-10-29, имплементация: dev-субагент шага 03 прерван по таймауту сессии после ~100% бэкенда (127 Rust-тестов, гейты); оркестратор дозакрыл SPA (мастер 3 шагов, статусы на StartConnection, api-клиент, 80 SPA-тестов), CI (vault-grep гейт, e2e, ключ) и README. Верификация: 132 Rust + 80 SPA, гейты PASS (74 891 Б gzip), живьём: exit 1 без ключа с инструкцией, 422-валидация без БД/пробы, 503-деградация.
 
 ## Spec Change Log
 
 ## Review Triage Log
+
+Ревью 29.10.2026, 2 прогона × 3 слоя (первый — по неполному диффу без untracked-файлов, дефект стейджинга оркестратора, исправлен; итог — по полному диффу 4663 строки): blind-hunter 15 / edge-case-hunter 10 / verification-gap 3+2 (pre-verified) → 30 уникальных находок → **20 патч-групп применены / 3 отклонено / 7 слияний дубликатов**. Лупбэков нет (0 intent_gap / 0 bad_spec). Отклонения:
+
+- Нет CI-проверки «ключ не задан → exit 1» — отклонено: покрыто юнит-тестами config (MissingVaultKey) + живой проверкой оркестратора (записана в задачах); CI-негатив старта — дрейф-риск ради маржинальной ценности.
+- Spec GET-форма без client_id / пустой Spec Change Log — отклонено: фикс = правка спеки (запрещено правилом триажа); README/ConnectionDto — действующий контракт, client_id задокументирован в Code Map.
+- Хардкод #b3261e в styles.css — отклонено (false): тот же литерал в .form-error с Story 1.2 — существующий паттерн, не регрессия.
+
+Ключевые патчи (полный список — Implementation Notes): Debug-маскирование ключей; from_hex ASCII; prod-запрет override; summarize(пусто); COALESCE; бюджет POST 30с; ротация/выход из мастера; vault-grep 3 класса; CI-лайфсайкл с заглушкой проб.
 
 ## Design Notes
 

@@ -10,7 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 pult-platform = { path = "../platform" }
-# Чистый домен правил вердикта шага 0 (Story 1.2, AD-1): шлюз — композиция.
+# Чистый домен правил вердикта шага 0 и token-vault (Stories 1.2/1.3, AD-1):
+# шлюз — композиция портов.
 pult-core-identity = { path = "../core/identity" }
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -20,6 +21,11 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Story 1.3: дата пробы stocks (dateFrom=today), AES-256-GCM, пробы прав.
+chrono = { workspace = true }
+aes-gcm = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls", "json"] }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 # Виртуальное время: тест бюджета БД (зависший стор → 503) без реальных 2с.

@@ -67,7 +67,7 @@ const DEV_USER_REF: &str = "dev-user";
 /// значения тоже отвергаются: краулерский мусор не становится постоянной
 /// строкой реестра установок. Никакой собственной аутентификации (NFR-6).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PlacementIdentity {
+pub(crate) struct PlacementIdentity {
     /// Ключ реестра установок (organizations.b24_member_id).
     pub member_id: String,
     /// Внешний ref пользователя (users.external_ref).
@@ -96,7 +96,9 @@ impl PlacementIdentity {
     /// реестре установок); частичный контекст и сверхдлинные значения —
     /// отказ (422 `invalid_placement`); литерал dev-портала в явном
     /// DOMAIN — отказ (422 `reserved_member_id`).
-    fn from_params(params: &HashMap<String, String>) -> Result<Self, PlacementIdentityError> {
+    pub(crate) fn from_params(
+        params: &HashMap<String, String>,
+    ) -> Result<Self, PlacementIdentityError> {
         let domain = params.get("DOMAIN").map(|v| v.trim()).unwrap_or_default();
         let user = params.get("USER_ID").map(|v| v.trim()).unwrap_or_default();
         let placement = params
@@ -141,7 +143,7 @@ impl PlacementIdentity {
     }
 
     /// true — идентичность подставлена dev-фоллбэком.
-    fn is_dev_fallback(&self) -> bool {
+    pub(crate) fn is_dev_fallback(&self) -> bool {
         self.member_id == DEV_MEMBER_ID
     }
 }
@@ -173,7 +175,7 @@ impl PgPerimeterStore {
     /// Идемпотентный upsert организации по ключу реестра установок
     /// `b24_member_id` (UNIQUE). Имя организации — домен портала (до
     /// хендшейка 1.3 реальных названий нет; PII не собираем).
-    async fn ensure_organization(&self, member_id: &str) -> Result<Uuid, sqlx::Error> {
+    pub(crate) async fn ensure_organization(&self, member_id: &str) -> Result<Uuid, sqlx::Error> {
         let inserted: Option<(Uuid,)> = sqlx::query_as(
             "INSERT INTO organizations (id, name, b24_member_id) \
                  VALUES ($1, $2, $3) \
@@ -490,9 +492,9 @@ fn step0_share(installs: i64, step0_completed: i64) -> f64 {
 
 // --- Общие построители ответов ---
 
-type ApiResult<T> = Result<(StatusCode, Json<T>), (StatusCode, Json<ErrorEnvelope>)>;
+pub(crate) type ApiResult<T> = Result<(StatusCode, Json<T>), (StatusCode, Json<ErrorEnvelope>)>;
 
-fn error_response(
+pub(crate) fn error_response(
     status: StatusCode,
     code: &str,
     message: impl Into<String>,
@@ -509,7 +511,7 @@ fn error_response(
 }
 
 /// 503-конверт «БД недоступна» (деградация не ломает маршруты /v1).
-fn db_unavailable() -> (StatusCode, Json<ErrorEnvelope>) {
+pub(crate) fn db_unavailable() -> (StatusCode, Json<ErrorEnvelope>) {
     error_response(
         StatusCode::SERVICE_UNAVAILABLE,
         "database_unavailable",
@@ -535,7 +537,7 @@ fn store_error_response(err: StoreError) -> (StatusCode, Json<ErrorEnvelope>) {
 /// Эхо чужого ввода в сообщении об ошибке: ≤ 64 символа, control-символы
 /// вырезаны — ни мегабайт, ни подделка многострочных лог-записей через
 /// warn!-лог не проходят (формальное ревью Story 1.2).
-fn echo(raw: &str) -> String {
+pub(crate) fn echo(raw: &str) -> String {
     let filtered: String = raw.chars().filter(|c| !c.is_control()).collect();
     let mut shown: String = filtered.chars().take(64).collect();
     if filtered.chars().count() > 64 {
@@ -585,7 +587,9 @@ fn reserved_domain_response() -> (StatusCode, Json<ErrorEnvelope>) {
 /// Маппит ошибки placement-контекста: резерв — 422 `reserved_member_id`,
 /// частичный/сверхдлинный — 422 `invalid_placement` (честная диагностика
 /// вместо тихой записи в dev-фикстуру или реестра-мусора).
-fn placement_error_response(err: PlacementIdentityError) -> (StatusCode, Json<ErrorEnvelope>) {
+pub(crate) fn placement_error_response(
+    err: PlacementIdentityError,
+) -> (StatusCode, Json<ErrorEnvelope>) {
     match err {
         PlacementIdentityError::ReservedDomain => reserved_domain_response(),
         PlacementIdentityError::PartialContext => error_response(

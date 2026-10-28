@@ -25,3 +25,12 @@ bmad-code-review / bmad-retrospective. Каждая запись обязана 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-perimeter-filter.md`
   summary: Ноль React-компонентных/интеграционных тестов — вся SPA-сеть покрыта только чистыми функциями (api/appState/step0/b24)
   evidence: Submit-флоу Questionnaire, роутинг-эффект App и рендер экранов (ExitScreen/StartConnection) не тестируются — нужна инфраструктура RTL+jsdom (новые devDeps, настройка vitest environment). Осознанный паттерн 1.1–1.2 («логика — в чистые функции, компоненты — тонкие») компенсирует часть риска, но регрессии JSX/эффектов ловит только CI-e2e. Закрытие: при первом сложном компоненте (виджет 1.8) или в Epic 2 hardening — добавить @testing-library/react + jsdom иSmoke-тесты экранов. Владелец закрытия: соответствующая сторис/ретроспектива эпика 1.
+
+## Deferred from: bmad-build review of spec-1-3-marketplace-connect-token-vault (2026-10-29)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-marketplace-connect-token-vault.md`
+  summary: Ротация master-ключа vault (несколько версий + re-encrypt job) — Ф1+
+  evidence: Ф0 — единственный env-ключ версии 1 (порт MasterKeyProvider уже принимает key_for_version); миграция 0006 хранит key_version. Настоящая ротация = вторая версия ключа в провайдере + фоновый re-encrypt старых записей (без расшифрования в логах, AD-16) — имеет смысл при появлении KMS-адаптера (YC KMS, провижининг РФ-хостинга). Владелец закрытия: инфраструктурная сторис Ф1/Epic 2 hardening.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-marketplace-connect-token-vault.md`
+  summary: B24-хендшейк (проверка подписи placement, ONAPPINSTALL) — не входит в epics.md Story 1.3
+  evidence: deferred из 1.2 «write-on-GET до хендшейка» оставался с пометкой «хендшейк 1.3», но epics.md Story 1.3 содержит только мастер площадок + vault. Защита write-on-GET (краулеры создают «установки») остаётся открытой до отдельной сторис хендшейка (кандидат: Story 1.4-префикс или Epic 2) — реальный фикс: проверка подписи Б24 при регистрации приложения в Маркете (внешний контур владельца).

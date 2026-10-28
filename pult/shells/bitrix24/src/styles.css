@@ -265,3 +265,140 @@ body {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* Мастер подключения площадок с token-vault (Story 1.3, шаги 1–3). */
+.connect-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connect-choice {
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  font: inherit;
+  font-weight: 600;
+}
+
+.connect-choice:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.connect-marketplace {
+  margin: 0;
+  font-weight: 700;
+}
+
+.connect-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.connect-field input,
+.connect-field textarea {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.connect-field input:focus,
+.connect-field textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.connect-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.card__link {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.card__note {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.connect-ok {
+  margin: 0;
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.rights-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.rights-list__item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.rights-list__item--ok {
+  border-color: var(--ok);
+}
+
+.rights-list__item--fail {
+  border-color: #b3261e;
+}
+
+/* Статусы подключений на экране воронки (Story 1.3). */
+.connections {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.connections__title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.connections__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.connections__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.connections__ok {
+  color: var(--ok);
+}
+
+.connections__off {
+  color: var(--off);
+}
