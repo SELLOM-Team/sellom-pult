@@ -72,7 +72,10 @@ mod tests {
         let value = serde_json::to_value(&envelope).expect("сериализуемо");
         let error = value.get("error").expect("обёртка error");
         for key in ["code", "message", "request_id", "details"] {
-            assert!(error.get(key).is_some(), "конверт обязан содержать error.{key}");
+            assert!(
+                error.get(key).is_some(),
+                "конверт обязан содержать error.{key}"
+            );
         }
         assert_eq!(error["code"], "portal_not_found");
         assert_eq!(error["message"], "Портал не найден");

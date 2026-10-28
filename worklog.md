@@ -216,3 +216,29 @@ Stage Summary:
 - Structural Seed поставлен целиком по Code Map спеки: pult/ (13 крейтов, gateway+platform+7 core+4 conveyor), db/migrations 0001..0004, deploy-стек, 3 гейт-скрипта, SPA-оболочка Б24, CI на 4 jobs, README.
 - Гейты AD-1/AD-28/AD-30 работают как исполняемые проверки (в обе стороны: PASS на каркасе, FAIL на нарушениях).
 - Осталось на внешние контуры: CI-прогон на push (нет docker/PG локально), установка из Маркета Б24 (владелец, dev-аккаунт) — помечены как внешние верификации в спеке.
+
+---
+Task ID: 12
+Agent: dev-субагент (Story 1.1, фикс-итерация ревью)
+Task: Устранить находки ревью Story 1.1 (triage-таблица в спеке, маршруты patch) минимальными правками.
+
+Work Log:
+- ci.yml: (1) FAIL-направление гейтов — в job gates добавлены самотесты: фикс tmp-dir (yaml с image:redis + Dockerfile FROM → exit 1 valkey-grep), tmp-корень pult (core-крейт с dev-dep pult-conveyor-* и use pult_conveyor_… → exit 1 hex-lint; path-dep с ключом без префикса → exit 1; комментарий в Cargo.toml не триггерит → PASS; пустой core/ → exit 2), в job spa — негатив bundle-гейта (лимит 1000 → exit 1); (2) идемпотентность миграций pinned: после рестарта шлюза цикл /health ok + /ready→ready (читает migrations_applied); в degraded-шаге ассерт /ready→not_ready с "migrations_applied":true; (3) start postgres переставлен ДО финальных ассертов (bash -e больше не обрывает шаг до восстановления БД); (4) permissions: contents: read (top-level) + timeout-minutes: rust 15 / spa 10 / gates 5 / integration 20; (5) cargo fmt --all -- --check и --locked в build/clippy/test (components: clippy, rustfmt); (6) в spa job добавлен шаг npm run test (vitest); (7) ПОПУТНО ЛОВЛЕН И ИСПРАВЛЕН баг триггера: push-фильтр был 'branches: ain]' (объеденный [main] ещё в 035a781) — восстановлен [main], без этого CI не запускался бы по push.
+- vite.config.ts: server.proxy /health и /ready → http://localhost:8080 (раньше dev-запрос уходил в SPA-fallback → ложный gateway-up).
+- App.tsx: честная семантика статуса — 200→gateway-up, 503→gateway-degraded, любой другой код→offline (раньше любой не-ok → degraded-фикция).
+- Skeleton.tsx: clamp ширины Math.max(0, 100 - i*18).
+- b24.test.ts (новый, vitest 5.0.5): readPlacementContext — B24-query → embedded:true+поля; пустой/посторонний/пустой-PLACEMENT query → embedded:false; package.json: script "test": "vitest run" + devDep vitest ^5.0.5 (peer vite ^8 совместим; lock обновлён).
+- config.rs: NotUnicode PULT_HTTP_PORT → явная InvalidEnv (не дефолт 8080); порт 0 → reject; DATABASE_URL хранится trim-нутым; from_env делегирует в from_lookup (подменяемый источник) — 9 юнит-тестов веток без гонок за окружение (missing/blank/trim URL, defaults, невалидный порт, порт 0, NotUnicode порт, невалидный PULT_ENV, явные порт+env).
+- events.rs: доко-контракт приведён к честному — код проверяет только snake_case; past tense — конвенция ревью, не enforce (доки поля/new/enum + текст ошибки).
+- hexagonal-lint.mjs: маркер 'conveyor/' (path-dep с переименованным ключом ловится); guard: пустой core/ → exit 2; чистка #-комментариев Cargo.toml перед сопоставлением.
+- bundle-size.mjs: fallback «все assets/*.js» заменён на fail(2); regex type/rel с /i; неклассифицируемый ref (внешний URL / не-.js) → fail(2).
+- compose: start_period 30s/20s/10s (postgres/rabbitmq/valkey) поверх зафиксированного 8b673dd пути тома PG 18.
+- gateway/Cargo.toml: убрана мёртвая зависимость uuid (Cargo.lock перегенерирован).
+- README.md: npm run build = только сборка; гейт размера — отдельная команда node platform/scripts/bundle-size.mjs … (и CI job spa).
+- Верификация (точечно, только затронутое): гейты в обе стороны локально (hex PASS + 3 негатива + comment-hygiene + empty-core; valkey PASS + негатив; bundle PASS + low-limit→1 + uppercase-TYPE/external/no-refs→2); cargo fmt --all -- --check чисто (заодно прогнан rustfmt по дрейфу main.rs/error.rs/events.rs); cargo test -p pult-platform → 17 зелёных (10 config + 3 error + 4 events); cargo build + clippy -p pult-platform -p pult-gateway --all-targets --locked -D warnings — чисто; npm run test → 4 зелёных; npm run build + bundle-гейт PASS (69 560 < 200 000); YAML-валидация ci.yml (permissions/branches[main]/таймауты) и compose.
+- Спека (status in-review + triage-таблица от ревьюера) в коммит не включена — книга ревьюера, лежит в рабочем дереве.
+
+Stage Summary:
+- Все patch-находки triage (№1/2/3/6/7/8/9/10-часть/11/12/13-uuid/14/15/17/18/19/20/22/24/25/26/28/29/30/31/32/33) закрыты минимальными правками; отклонённые triage не тронуты (включая graceful shutdown, appendonly, event-Deserialize).
+- Дополнительно закрыт не попавший в triage баг: push-триггер ci.yml ('branches: ain]' → '[main]').
+- CI-прогон и full-verification — на стороне ревьюера.

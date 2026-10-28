@@ -11,7 +11,7 @@
  * Пример: node platform/scripts/bundle-size.mjs pult/shells/bitrix24/dist 200000
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 
@@ -36,40 +36,41 @@ if (!existsSync(indexHtmlPath)) {
 
 const html = readFileSync(indexHtmlPath, 'utf8')
 
-// <script type="module" ... src="..."> в любом порядке атрибутов.
+// <script type="module" ... src="..."> в любом порядке атрибутов и регистре.
 const initialRefs = new Set()
 for (const tagMatch of html.matchAll(/<script\b[^>]*>/g)) {
   const tag = tagMatch[0]
-  if (!/type\s*=\s*["']module["']/.test(tag)) continue
+  if (!/type\s*=\s*["']module["']/i.test(tag)) continue
   const src = tag.match(/src\s*=\s*["']([^"']+)["']/)
   if (src) initialRefs.add(src[1])
 }
 // <link rel="modulepreload" href="...">
 for (const linkMatch of html.matchAll(/<link\b[^>]*>/g)) {
   const tag = linkMatch[0]
-  if (!/rel\s*=\s*["']modulepreload["']/.test(tag)) continue
+  if (!/rel\s*=\s*["']modulepreload["']/i.test(tag)) continue
   const href = tag.match(/href\s*=\s*["']([^"']+)["']/)
   if (href) initialRefs.add(href[1])
 }
 
-let jsFiles = [...initialRefs]
-  .filter((ref) => ref.endsWith('.js'))
+if (initialRefs.size === 0) {
+  fail('в index.html нет module-скриптов — входные чанки не определены (честный провал, fallback запрещён)', 2)
+}
+
+// Каждый ref обязан быть локальным .js-ассетом: внешний URL или не-.js ref
+// иначе молча выпадает из бюджета — для гейта это недопустимо.
+const unclassifiable = [...initialRefs].filter(
+  (ref) => !/\.js(?:\?.*)?$/i.test(ref) || /^(https?:)?\/\//i.test(ref) || /^data:/i.test(ref),
+)
+if (unclassifiable.length > 0) {
+  fail(`неклассифицируемые module-ref (вне бюджета честно): ${unclassifiable.join(', ')}`, 2)
+}
+
+const jsFiles = [...initialRefs]
   .map((ref) => join(dist, ref.replace(/^\//, '')))
   .filter((path) => existsSync(path))
 
 if (jsFiles.length === 0) {
-  // Fallback: нет модульных ссылок — берём все JS в dist/assets (честно предупреждаем).
-  const assetsDir = join(dist, 'assets')
-  if (existsSync(assetsDir)) {
-    jsFiles = readdirSync(assetsDir)
-      .filter((name) => name.endsWith('.js'))
-      .map((name) => join(assetsDir, name))
-    console.warn('[AD-30] bundle-size: в index.html нет module-скриптов, измеряю все assets/*.js')
-  }
-}
-
-if (jsFiles.length === 0) {
-  fail('в dist не найдено JS-ассетов входных чанков', 2)
+  fail('JS-ассеты входных чанков отсутствуют в dist', 2)
 }
 
 let total = 0

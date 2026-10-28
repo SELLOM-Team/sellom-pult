@@ -48,9 +48,14 @@ curl -s localhost:8080/ready    # {"status":"ready",...,"migrations_applied":tru
 ```bash
 cd pult/shells/bitrix24
 npm ci
-npm run dev      # локальный dev-режим, :5173
-npm run build    # dist/ + гейт размера: критический путь < 200 КБ gzip (AD-30)
+npm run dev      # локальный dev-режим, :5173 (/health и /ready проксируются на шлюз :8080)
+npm run test     # автотесты точки интеграции Б24 (vitest)
+npm run build    # только сборка dist/ — гейт размера запускается отдельно
 ```
+
+Гейт размера критического пути (AD-30) — отдельная команда
+`node platform/scripts/bundle-size.mjs shells/bitrix24/dist 200000` (в CI — job spa);
+`npm run build` его не запускает.
 
 ## Локальные гейты
 

@@ -15,7 +15,9 @@ pub struct EventEnvelope<P> {
     /// UUIDv7 — время-упорядоченный идентификатор события (генерация на слое
     /// приложения: `uuid::Uuid::now_v7()`; в DDL — только fallback).
     pub event_id: Uuid,
-    /// Тип события: snake_case, past tense (например, `organization_created`).
+    /// Тип события: snake_case-метка (например, `organization_created`);
+    /// семантически — past tense, но это конвенция именования (AD-22),
+    /// проверяемая ревью, а не этим кодом.
     pub event_type: String,
     /// Организация-владелец данных (изоляция данных по порталу).
     pub organization_id: Uuid,
@@ -32,7 +34,7 @@ impl<P> EventEnvelope<P> {
     ///
     /// # Errors
     /// [`EventTypeError::InvalidEventType`], если `event_type` пуст или не
-    /// snake_case-метка.
+    /// snake_case-метка. Past tense кодом не проверяется — конвенция ревью.
     pub fn new(
         event_type: &str,
         organization_id: Uuid,
@@ -54,8 +56,11 @@ impl<P> EventEnvelope<P> {
 /// Ошибки валидации типа события.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EventTypeError {
-    /// Тип события должен быть непустой snake_case-меткой (past tense).
-    #[error("event_type must be a non-empty snake_case label, got {0:?}")]
+    /// Тип события должен быть непустой snake_case-меткой; past tense —
+    /// конвенция ревью, кодом не enforce.
+    #[error(
+        "event_type must be a non-empty snake_case label (past tense is a review convention, not enforced), got {0:?}"
+    )]
     InvalidEventType(String),
 }
 
@@ -90,7 +95,10 @@ mod tests {
         assert_eq!(envelope.organization_id, org);
         assert_eq!(envelope.schema_version, 1);
         let delta = Utc::now() - envelope.occurred_at;
-        assert!(delta.num_seconds() < 5, "occurred_at должен быть ~текущее UTC");
+        assert!(
+            delta.num_seconds() < 5,
+            "occurred_at должен быть ~текущее UTC"
+        );
     }
 
     #[test]
@@ -110,7 +118,10 @@ mod tests {
             "schema_version",
             "payload",
         ] {
-            assert!(fields.contains_key(key), "конверт AD-22 обязан содержать {key}");
+            assert!(
+                fields.contains_key(key),
+                "конверт AD-22 обязан содержать {key}"
+            );
         }
         assert_eq!(fields["event_type"], "portal_settings_updated");
         assert_eq!(fields["schema_version"], 2);
@@ -131,9 +142,16 @@ mod tests {
     #[test]
     fn rejects_invalid_event_types() {
         let org = Uuid::now_v7();
-        for bad in ["", "OrgCreated", "org created", "org-created", "_created", "created__ok"] {
-            let err = EventEnvelope::new(bad, org, 1, json!(null))
-                .expect_err("должен быть отклонён");
+        for bad in [
+            "",
+            "OrgCreated",
+            "org created",
+            "org-created",
+            "_created",
+            "created__ok",
+        ] {
+            let err =
+                EventEnvelope::new(bad, org, 1, json!(null)).expect_err("должен быть отклонён");
             assert_eq!(err, EventTypeError::InvalidEventType(bad.to_owned()));
         }
     }

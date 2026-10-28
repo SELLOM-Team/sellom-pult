@@ -28,6 +28,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+      start_period: 30s
 
   rabbitmq:
     image: rabbitmq:4.4-management
@@ -43,6 +44,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 12
+      start_period: 20s
 
   valkey:
     image: valkey/valkey:9.1
@@ -56,6 +58,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+      start_period: 10s
 
 volumes:
   pgdata:

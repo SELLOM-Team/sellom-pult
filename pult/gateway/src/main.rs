@@ -112,7 +112,10 @@ async fn run_migrations(db: PgPool, migrations_applied: Arc<AtomicBool>) {
         match migrator.run(&db).await {
             Ok(_) => {
                 migrations_applied.store(true, Ordering::Relaxed);
-                info!("миграции применены (forward-only, {} версий)", migrator.migrations.len());
+                info!(
+                    "миграции применены (forward-only, {} версий)",
+                    migrator.migrations.len()
+                );
                 return;
             }
             Err(err) => {

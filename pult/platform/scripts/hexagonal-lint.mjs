@@ -19,7 +19,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Конвейер и оболочки, а также их возможные будущие crate-имена — запрещены ядру.
-const FORBIDDEN_TOML_MARKERS = ['pult-conveyor-', 'pult-shell-', 'shells/']
+const FORBIDDEN_TOML_MARKERS = ['pult-conveyor-', 'pult-shell-', 'conveyor/', 'shells/']
 const FORBIDDEN_RS_IDENTIFIERS = ['pult_conveyor', 'pult_shell', 'shells::']
 
 function pultRoot() {
@@ -53,15 +53,29 @@ if (!existsSync(coreDir)) {
   process.exit(2)
 }
 
+const crates = listCrateDirs(coreDir)
+if (crates.length === 0) {
+  console.error('[AD-1] hexagonal-lint: в core/ нет ни одного крейта — гейту нечего проверять')
+  process.exit(2)
+}
+
+// Комментарии в манифесте не должны триггерить гейт (# до конца строки).
+function stripTomlComments(text) {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/#.*$/, ''))
+    .join('\n')
+}
+
 const violations = []
 
-for (const crate of listCrateDirs(coreDir)) {
+for (const crate of crates) {
   const crateDir = join(coreDir, crate)
 
   // 1. Манифест: зависимости от конвейера/оболочек запрещены.
   const manifestPath = join(crateDir, 'Cargo.toml')
   if (existsSync(manifestPath)) {
-    const manifest = readFileSync(manifestPath, 'utf8')
+    const manifest = stripTomlComments(readFileSync(manifestPath, 'utf8'))
     for (const marker of FORBIDDEN_TOML_MARKERS) {
       if (manifest.includes(marker)) {
         violations.push({ crate, file: `core/${crate}/Cargo.toml`, detail: `зависимость/упоминание «${marker}»` })
@@ -96,4 +110,4 @@ if (violations.length > 0) {
   process.exit(1)
 }
 
-console.log(`[AD-1] hexagonal-lint: PASS — граница ядра чиста (${listCrateDirs(coreDir).length} крейтов core/*)`)
+console.log(`[AD-1] hexagonal-lint: PASS — граница ядра чиста (${crates.length} крейтов core/*)`)

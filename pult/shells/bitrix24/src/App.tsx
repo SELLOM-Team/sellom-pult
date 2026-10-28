@@ -19,10 +19,15 @@ export default function App() {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 1500)
 
-    // Dev-удобство: пробуем /health шлюза (Vite-прокси на pult-gateway).
+    // Dev-удобство: пробуем /health шлюза через Vite-прокси (→ localhost:8080).
+    // Честная семантика: 200 → шлюз жив; 503 → шлюз жив, но БД degraded;
+    // любой другой код (в т.ч. SPA-fallback 404 без прокси) → шлюза нет.
     fetch('/health', { signal: controller.signal })
       .then((res) => {
-        if (!cancelled) setPhase(res.ok ? 'gateway-up' : 'gateway-degraded')
+        if (cancelled) return
+        if (res.status === 200) setPhase('gateway-up')
+        else if (res.status === 503) setPhase('gateway-degraded')
+        else setPhase('offline')
       })
       .catch(() => {
         if (!cancelled) setPhase('offline')
