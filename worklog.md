@@ -242,3 +242,22 @@ Stage Summary:
 - Все patch-находки triage (№1/2/3/6/7/8/9/10-часть/11/12/13-uuid/14/15/17/18/19/20/22/24/25/26/28/29/30/31/32/33) закрыты минимальными правками; отклонённые triage не тронуты (включая graceful shutdown, appendonly, event-Deserialize).
 - Дополнительно закрыт не попавший в triage баг: push-триггер ci.yml ('branches: ain]' → '[main]').
 - CI-прогон и full-verification — на стороне ревьюера.
+
+---
+Task ID: 12 (завершение, оркестратор)
+Agent: main (Z.ai) — верификация по диффу, CI, ревью 3 слоями, триаж
+Task: Step-03/04/05 bmad-build для Story 1.1: проверка имплементации по диффу, первый CI-прогон, фикс-коммит, ревью, патчи, финальная верификация.
+
+Work Log:
+- Верификация по диффу (не по отчёту): полный diff 035a781 прочитан; локально воспроизведены cargo build/clippy/test (11), гейты PASS + негативы exit=1, degraded-режим живьём (503 за 0.5с).
+- CI-прогон №1 (035a781): failure ×2 — (1) spa: bundle-гейт резолвил пути от working-directory джобы → шаговый working-directory override; (2) integration: postgres:18 exited(1) — образ сменил каталог данных (web-верифицировано: volume теперь /var/lib/postgresql) → перемонтирован том + диагностический шаг. Фикс-коммит 8b673dd → CI зелёный (run 40699452948).
+- Ревью step-04, 3 слоя параллельно (blind-hunter / edge-case-hunter / verification-gap): 35 находок; триаж в спеке (таблица): 25 → patch, 9 отклонены (false/low-критерии/не-intent), 1 carried-закрыт. Группы патчей: гейт-самотесты в CI, dev-proxy Vite, /ready-ассерты, SPA-тест, robustness hex-lint, честность bundle-гейта, config-валидация+тесты, fmt/--locked, permissions/timeout, start_period, uuid-dep, README, clamp.
+- Патчи тем же сабагентом (resume): b0d927a. ПУНКТ «бонус: починен push-триггер branches: ain]» — ОШИБКА ИНСТРУМЕНТА РЕНДЕРИНГА ВЫВОДА: последовательность «[m» глоталась в текстовом выводе (grep/diff/cat); od -c доказал, что branches: [main] корректен ВО ВСЕХ коммитах с 035a781. Реального бага не было; правки триггера не требовалось и не вносилось. Будущим агентам: при подозрениях на «битые скобки» в выводе — сверяться od -c / python.
+- Полная перепроверка патчей: fmt OK; build --locked; clippy --locked -D warnings 0; Rust-тесты 20 (17 platform + 3 gateway); SPA vitest 4; bundle 69 560 < 200 000; гейты PASS + все негативные направления (exit 1/1/1/2/1) — включая новые самотесты из CI. YAML ci.yml/compose валидны.
+- CI на b0d927a: completed success (все 4 jobs, самотесты гейтов зелены).
+- Step-05: спека spec-1-1-structural-seed.md → status: done; sprint-status.yaml 1-1 → review (по workflow; next: bmad-code-review → done). Коммит 27f31dc (триаж-лог) запушен.
+
+Stage Summary:
+- Story 1.1 «Стартовый каркас приложения и Structural Seed» — реализована, отревьюена 3 слоями, запатчена, верифицирована (локально + CI зелёный). 4 коммита: 035a781, 8b673dd, b0d927a, 27f31dc.
+- Внешние верификации остаются за владельцем: установка из Маркета Б24 в тестовый портал (нужен dev-аккаунт); формальный bmad-code-review (перевод сторис review → done).
+- Следующий шаг: bmad-code-review для 1-1 → done → Story 1.2 «Шаг 0 — фильтр периметра» (bmad-build).

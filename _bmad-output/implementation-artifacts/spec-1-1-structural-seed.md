@@ -2,7 +2,7 @@
 title: 'Story 1.1 — Стартовый каркас приложения и Structural Seed'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '35c2b774b8ec0ba1b048d85fbf39e6d9934dc3f2'
