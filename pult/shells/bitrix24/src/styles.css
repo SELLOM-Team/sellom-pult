@@ -281,11 +281,6 @@ body {
   font-weight: 600;
 }
 
-.connect-choice:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
 .connect-marketplace {
   margin: 0;
   font-weight: 700;

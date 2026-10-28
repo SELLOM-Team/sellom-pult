@@ -40,17 +40,15 @@ const SECRET_COLUMN_RES = [
 
 // Секрето-подобное имя рядом с plaintext-типом в любой позиции строки
 // (ловит перенос схемы в нестандартном форматировании).
+// Составные имена тоже ловим: ozon_api_key text, wb_token text и т.п.
+// (формальное ревью 1.3: \b не матчит внутри ozon_api_key).
 const SECRET_PLAINTEXT_TYPE_RE =
-  /\b(token|api_key|apikey|secret|password)\b\s+(text|varchar|character varying|character|jsonb|uuid)\b/i
+  /\b\w*?(token|api_key|apikey|secret|password)\w*\b\s+(text|varchar|character varying|character|jsonb|uuid)\b/i
 
-// SQL-комментарии — не код (vault-grep проверяет DDL): строчные `--`
-// и блочные `/* */` (ревью Story 1.3: блочный комментарий с колонкой
-// token text не должен ловиться, а перенесённая по строкам колонка —
-// не должна проходить мимо).
-function stripSqlComments(line) {
-  return line
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--.*$/, '')
+// Строчный SQL-комментарий -- до конца строки — не код (блочные срезаны
+// по всему файлу до разбивки; ревью Story 1.3).
+function stripLineComment(line) {
+  return line.replace(/--.*$/, '')
 }
 
 function normalizeWhitespace(line) {
@@ -69,7 +67,7 @@ function listSqlFiles(dir) {
     return [dir]
   }
   return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.sql'))
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.sql'))
     .map((entry) => join(dir, entry.name))
     .sort()
 }
@@ -103,11 +101,13 @@ for (const file of files) {
     console.error(`[AD-16] vault-grep: ошибка чтения ${file}: ${err.message}`)
     process.exit(2)
   }
-  // Сырые строки — для диагностики; проверяются нормализованные
-  // (комментарии срезаны, пробелы схлопнуты — перенесённая по строкам
-  // колонка не проходит мимо; ревью Story 1.3).
-  const rawLines = content.split('\n')
-  const normalizedLines = rawLines.map(stripSqlComments).map(normalizeWhitespace)
+  // Блочные комментарии /* */ срезаются ПО ВСЕМУ файлу до разбивки на
+  // строки — иначе многострочный комментарий оставляет свои внутренние
+  // строки детекторам (ложный FAIL, формальное ревью 1.3). Строчные --
+  // срезаются построчно (они не переносятся через строки SQL).
+  const withoutBlocks = content.replace(/\/\*[\s\S]*?\*\//g, ' ')
+  const rawLines = withoutBlocks.split('\n')
+  const normalizedLines = rawLines.map((line) => line.replace(/--.*$/, '')).map(normalizeWhitespace)
   normalizedLines.forEach((line, idx) => {
     const lowered = line.toLowerCase()
     const literal = LITERAL_PATTERNS.find((pattern) => lowered.includes(pattern))

@@ -257,7 +257,7 @@ export function parseConnections(body: unknown): ConnectionInfo[] {
       (STATUSES as readonly unknown[]).includes(status) &&
       Array.isArray(row.schemes) &&
       Array.isArray(row.rights) &&
-      typeof row.verified_at !== 'number'
+      (row.verified_at === null || typeof row.verified_at === 'string')
     ) {
       return {
         marketplace,

@@ -66,6 +66,13 @@ export function validateConnectForm(
     tokenError = 'Вставьте API-токен площадки'
   } else if (/[\n\r\t]/.test(trimmedToken)) {
     tokenError = 'Токен не должен содержать переносов строк'
+  } else if (trimmedToken.length > 1024) {
+    // Паритет с сервером (vault::validate_token, MAX_TOKEN_LEN = 1024):
+    // предотвращаем заведомый 422 (формальное ревью 1.3).
+    tokenError = 'Токен слишком длинный — проверьте, что вставлен целиком один ключ'
+  } else if (/[\u0000-\u001f\u007f]/.test(trimmedToken)) {
+    // Паритет с сервером (ControlChars): прочие control-символы тоже мусор.
+    tokenError = 'Токен содержит недопустимые управляющие символы'
   }
 
   let clientIdError = ''

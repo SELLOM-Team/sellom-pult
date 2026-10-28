@@ -114,7 +114,11 @@ fn classify_probe_response(status: u16, body_snippet: &str, spec: &ProbeSpec) ->
     if status == 401 || status == 403 {
         return ProbeResult::Denied(spec.denial_hint.to_owned());
     }
-    if let Some(marker) = spec.auth_error_marker
+    // Маркер credentials-ошибки — только на 400 (формальное ревью 1.3):
+    // 5xx платформы со случайным «Invalid Api-Key» в теле — недоступность
+    // площадки, а не отказ прав (сетевые проблемы ≠ отказ прав).
+    if status == 400
+        && let Some(marker) = spec.auth_error_marker
         && body_snippet.contains(marker)
     {
         return ProbeResult::Denied(spec.denial_hint.to_owned());
@@ -239,35 +243,47 @@ impl HttpRightsProbe {
                 .body(body.clone());
         }
         match request.send().await {
-            Ok(response) => {
+            Ok(mut response) => {
                 // Потолок чтения тела: непонятный/враждебный ответ площадки не
-                // буферизуется целиком (ревью 1.3: нужен только короткий сниппет
-                // для маркерной диагностики Ozon).
+                // буферизуется целиком — читаем порционно, не более
+                // MAX_BODY_BYTES (формальное ревью 1.3: прежний
+                // content_length-чек пропускал chunked-ответы без заголовка —
+                // text() буферизовал всё до таймаута).
                 const MAX_BODY_BYTES: usize = 64 * 1024;
-                if response
-                    .content_length()
-                    .is_some_and(|len| len > MAX_BODY_BYTES as u64)
-                {
+                let mut raw_body: Vec<u8> = Vec::new();
+                let mut too_big = false;
+                while let Some(chunk) = response.chunk().await.unwrap_or_default() {
+                    let remaining = MAX_BODY_BYTES - raw_body.len();
+                    if remaining == 0 {
+                        too_big = true;
+                        break;
+                    }
+                    let take = remaining.min(chunk.len());
+                    raw_body.extend_from_slice(&chunk[..take]);
+                    if take < chunk.len() {
+                        too_big = true;
+                    }
+                }
+                if too_big {
                     debug!(
                         probe = spec.name,
                         "проба прав ответила слишком большим телом"
                     );
-                    ProbeCheck {
+                    return ProbeCheck {
                         name: spec.name.to_owned(),
                         result: ProbeResult::Unreachable,
-                    }
-                } else {
-                    let status = response.status().as_u16();
-                    // Тело — только для маркерной диагностики Ozon; обрезается и
-                    // НЕ попадает в логи (площадки не любят эхо своих тел).
-                    let body = response.text().await.unwrap_or_default();
-                    let snippet: String = body.chars().take(PROBE_BODY_SNIPPET).collect();
-                    debug!(probe = spec.name, status, "проба прав ответила");
-                    let result = classify_probe_response(status, &snippet, &spec);
-                    ProbeCheck {
-                        name: spec.name.to_owned(),
-                        result,
-                    }
+                    };
+                }
+                let status = response.status().as_u16();
+                // Тело — только для маркерной диагностики Ozon; обрезается и
+                // НЕ попадает в логи (площадки не любят эхо своих тел).
+                let body = String::from_utf8_lossy(&raw_body);
+                let snippet: String = body.chars().take(PROBE_BODY_SNIPPET).collect();
+                debug!(probe = spec.name, status, "проба прав ответила");
+                let result = classify_probe_response(status, &snippet, &spec);
+                ProbeCheck {
+                    name: spec.name.to_owned(),
+                    result,
                 }
             }
             // Таймаут/DNS/соединение/5xx-классификация не нужна: сеть не ответила

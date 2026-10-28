@@ -53,6 +53,14 @@ describe('validateConnectForm — клиентская половина 422-ко
     expect(errors.token).toMatch(/перенос/)
   })
 
+  it('паритет с сервером: >1024 символов и control-символы ловятся клиентом (ревью 1.3)', () => {
+    const tooLong = validateConnectForm('wildberries', 'x'.repeat(1025), '', ['fbo'])
+    expect(tooLong.token).toMatch(/слишком длин/)
+    const control = validateConnectForm('wildberries', 'ey\u001btoken', '', ['fbo'])
+    expect(control.token).toMatch(/управляющ/)
+    expect(validateConnectForm('wildberries', 'x'.repeat(1024), '', ['fbo']).token).toBe('')
+  })
+
   it('Ozon без Client-Id — ошибка; с Client-Id — чисто', () => {
     const without = validateConnectForm('ozon', 'key', '', ['fbo'])
     expect(without.clientId).toMatch(/Client-Id/)

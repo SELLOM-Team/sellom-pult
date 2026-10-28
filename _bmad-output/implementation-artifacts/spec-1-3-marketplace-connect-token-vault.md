@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-10-29'
 status: 'done'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 baseline_commit: 'f456aba'
 story_key: '1-3-мастер-подключения-площадок-с-token-vault-шаги-1-3'
 context:
@@ -100,6 +100,11 @@ context:
 - Хардкод #b3261e в styles.css — отклонено (false): тот же литерал в .form-error с Story 1.2 — существующий паттерн, не регрессия.
 
 Ключевые патчи (полный список — Implementation Notes): Debug-маскирование ключей; from_hex ASCII; prod-запрет override; summarize(пусто); COALESCE; бюджет POST 30с; ротация/выход из мастера; vault-grep 3 класса; CI-лайфсайкл с заглушкой проб.
+
+
+## Review Findings (формальный bmad-code-review, 2026-10-29, вечер)
+
+4 слоя (blind 15 / edge 10 / VG 3+2 pre-verified / acceptance-auditor: 0 нарушений frozen-интента + 5 низкосеверити наблюдений и 5 «принятых аддитивных отклонений») → 30+ находок, после вычета уже-применённых build-патчей и слияний → **12 патч-групп применены / 3 defer / 4 отклонено**. Ключевые: CI-шаг лайфсайкла без резолва бинаря из корня (HIGH — вся верификация persistence-пути не исполнялась бы); plaintext-токены не грепались в логе шлюза; Ozon verified-путь (client_id round-trip) не исполнялся e2e (AC-3); chunked-ответ площадки буферизовался целиком (cap только при Content-Length); UI звал любую строку «подключена» (честность статусов); Ozon 400-маркер на 5xx = ложный rejected; override принимал путь/query/userinfo; клиентский паритет валидации (длина/control); многострочные блочные комментарии и составные имена (ozon_api_key) в vault-grep; гонка навигации мастера (generation); apiError после «Назад»; readiness-полл заглушки. Отклонено: глубокая валидация элементов парсера (same-origin доверие, серверные тесты фиксируют форму); catch-all mismatched-credentials (недостижим по построению connect_request_from_body); 500 на единственную повреждённую строку GET (дизайн CorruptData 1.2); CI-клинап заглушки (свежий раннер на прогон). Defer: AAD-привязка шифротекста к (org, marketplace) — до Epic 2, retrofit через re-encrypt; zeroize ключей; advisory-lock на POST/DELETE гонку (ресуррект отозванного токена).
 
 ## Design Notes
 

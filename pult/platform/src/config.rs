@@ -263,10 +263,16 @@ fn validate_probe_override_host(host: &str) -> Result<(), ConfigError> {
                 "ожидался абсолютный origin вида http(s)://host[:port]".to_owned(),
             )
         })?;
-    if rest.is_empty() || rest.chars().any(char::is_whitespace) {
+    // Только origin: без пути/запроса/фрагмента/userinfo — иначе путь пробы
+    // искажается тихо (host/base/api/v1/...) (формальное ревью 1.3).
+    if rest.is_empty()
+        || rest.chars().any(char::is_whitespace)
+        || rest.contains(['/', '?', '#', '@'])
+    {
         return Err(ConfigError::InvalidEnv(
             "PULT_PROBE_HOST_OVERRIDE",
-            "ожидался абсолютный origin вида http(s)://host[:port]".to_owned(),
+            "ожидался чистый origin http(s)://host[:port] — без пути, запроса и userinfo"
+                .to_owned(),
         ));
     }
     Ok(())
@@ -515,6 +521,28 @@ mod tests {
             debug.contains("redacted"),
             "Debug обязан маскировать: {debug}"
         );
+    }
+
+    #[test]
+    fn probe_override_rejects_non_origins() {
+        // Ревью 1.3: путь/запрос/userinfo тихо искажали бы URL проб.
+        for bad in [
+            "http://host/base",
+            "http://host?x=1",
+            "http://user:pass@host",
+            "http://host/#frag",
+        ] {
+            let err = ServiceConfig::from_lookup(lookup(&[
+                ("DATABASE_URL", "postgres://pult:pult@db/pult"),
+                ("PULT_VAULT_MASTER_KEY", TEST_KEY),
+                ("PULT_PROBE_HOST_OVERRIDE", bad),
+            ]))
+            .expect_err("не-origin отклоняется");
+            assert!(matches!(
+                err,
+                ConfigError::InvalidEnv("PULT_PROBE_HOST_OVERRIDE", _)
+            ));
+        }
     }
 
     #[test]

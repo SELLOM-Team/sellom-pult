@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { B24PlacementContext } from '../../b24'
 import { connectMarketplace, type ConnectOutcome, type MarketplaceId } from '../../api'
 import {
@@ -41,6 +41,9 @@ export function ConnectMaster({
   const [submitting, setSubmitting] = useState(false)
   const [outcome, setOutcome] = useState<ConnectOutcome | null>(null)
   const [apiError, setApiError] = useState<string | null>(null)
+  // Генерация отправки: ответ после «Назад»/перевыбора площадки не должен
+  // перебрасывать юзера на шаг 3 (формальное ревью 1.3 — гонка навигации).
+  const submitGeneration = useRef(0)
 
   const step = wizardStep(marketplace, outcome)
   const errors = validateConnectForm(
@@ -55,6 +58,7 @@ export function ConnectMaster({
     // Подключённая площадка тоже выбирается — это ротация токена (спека 1.3:
     // повторный POST перезаписывает; ревью: кнопка «обновить токен» была
     // недостижима при disabled-выборе).
+    submitGeneration.current += 1
     setMarketplace(id)
     setSchemes([])
     setToken('')
@@ -69,6 +73,7 @@ export function ConnectMaster({
 
   const submit = async () => {
     if (marketplace === null || !canSubmit) return
+    const generation = submitGeneration.current
     setSubmitting(true)
     setApiError(null)
     try {
@@ -78,12 +83,14 @@ export function ConnectMaster({
         token: token.trim(),
         client_id: marketplace === 'ozon' ? clientId.trim() : undefined,
       })
+      if (submitGeneration.current !== generation) return
       setOutcome(result)
       if (result.status === 'verified') onConnected()
     } catch (err) {
+      if (submitGeneration.current !== generation) return
       setApiError(err instanceof Error ? err.message : 'Не удалось выполнить автотест прав')
     } finally {
-      setSubmitting(false)
+      if (submitGeneration.current === generation) setSubmitting(false)
     }
   }
 
@@ -179,8 +186,10 @@ export function ConnectMaster({
               type="button"
               className="card__link"
               onClick={() => {
+                submitGeneration.current += 1
                 setMarketplace(null)
                 setOutcome(null)
+                setApiError(null)
               }}
             >
               Назад

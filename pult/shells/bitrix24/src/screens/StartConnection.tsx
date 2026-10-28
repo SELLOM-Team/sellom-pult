@@ -118,13 +118,20 @@ export function StartConnection({ placement }: { placement: B24PlacementContext 
               <ul className="connections__list">
                 {(Object.keys(MARKETPLACE_LABELS) as MarketplaceId[]).map((id) => {
                   const row = connections.find((c) => c.marketplace === id)
+                  // Честность UI (формальное ревью 1.3): «подключена» — только
+                  // verified; rejected/probe_unavailable — свои честные метки.
+                  const stateText = !row
+                    ? 'не подключена'
+                    : row.status === 'verified'
+                      ? `подключена (${row.schemes.join(', ')})`
+                      : row.status === 'rejected'
+                        ? 'права не подтверждены — повторите подключение'
+                        : 'площадка не ответила — повторите позже'
                   return (
                     <li key={id} className="connections__row">
                       <span>{MARKETPLACE_LABELS[id]}</span>
-                      <strong className={row ? 'connections__ok' : 'connections__off'}>
-                        {row
-                          ? `подключена (${row.schemes.join(', ')})`
-                          : 'не подключена'}
+                      <strong className={row?.status === 'verified' ? 'connections__ok' : 'connections__off'}>
+                        {stateText}
                       </strong>
                     </li>
                   )

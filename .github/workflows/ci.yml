@@ -532,10 +532,13 @@ jobs:
           echo "триггер set_updated_at подтверждён (updated_at > created_at после UPDATE)"
       - name: "шаг 1.3 (e2e) — полный verified-лайфсайкл через локальную заглушку проб"
         run: |
-          # Локальная 2xx-заглушка проб (все GET/POST → 200): ревью 1.3 —
-          # persistence-путь (save → GET → ротация → DELETE + plaintext
-          # не в шифротексте) обязан исполняться автоматически, а не только
-          # живьём владельцем.
+          # Формальное ревью 1.3 (HIGH): шаг исполняется из КОРНЯ (compose-пути
+          # pult/deploy/... записаны от корня), а бинарь — полным путём
+          # pult/target/debug/pult-gateway (ранее голый target/debug/...
+          # не резолвился из корня — вся верификация лайфсайкла не исполнялась).
+          # Локальная 2xx-заглушка проб (все GET/POST → 200): persistence-путь
+          # (save → GET → ротация → DELETE + plaintext не в шифротексте и логах)
+          # обязан исполняться автоматически, а не только живьём владельцем.
           cat > /tmp/probe_stub.py << 'PYEOF'
           from http.server import BaseHTTPRequestHandler, HTTPServer
           class Stub(BaseHTTPRequestHandler):
@@ -553,7 +556,14 @@ jobs:
           PYEOF
           nohup python3 /tmp/probe_stub.py > /tmp/probe-stub.log 2>&1 &
           echo $! > /tmp/probe-stub.pid
-          sleep 1
+          # Readiness-полл заглушки (формальное ревью 1.3: голый sleep 1 —
+          # гонка с медленным стартом python).
+          stub_ok=0
+          for i in $(seq 1 20); do
+            if curl -s --max-time 2 -o /dev/null http://127.0.0.1:18081/any; then stub_ok=1; break; fi
+            sleep 0.5
+          done
+          [ "$stub_ok" = "1" ] || { echo "заглушка проб не поднялась"; exit 1; }
           # Перезапуск шлюза с override на ЗАГЛУШКУ (job-level override :9 —
           # для предыдущего шага probe_unavailable): степ-окружение сильнее
           # job-level. Старый процесс гасим (иначе порт 8080 занят); новый
@@ -562,7 +572,7 @@ jobs:
           sleep 2
           PULT_PROBE_HOST_OVERRIDE=http://127.0.0.1:18081 \
           DATABASE_URL=postgres://pult:pult@localhost:5432/pult \
-            nohup target/debug/pult-gateway > /tmp/pult-gateway-3.log 2>&1 &
+            nohup pult/target/debug/pult-gateway > /tmp/pult-gateway-3.log 2>&1 &
           echo $! > /tmp/pult-gateway.pid
           for i in $(seq 1 30); do
             hcode=$(curl -s --max-time 10 -o /tmp/h3.json -w '%{http_code}' http://localhost:8080/health || true)
@@ -589,6 +599,22 @@ jobs:
           [ "$code" = "200" ] && grep -q '"status":"verified"' /tmp/v2.json
           code=$(curl -s --max-time 10 -o /tmp/v3.json -w '%{http_code}' "$base/v1/connections?$qs")
           grep -q '"schemes":\["fbo"\]' /tmp/v3.json
+          # Ozon-нога (формальное ревью 1.3, AC-3): client_id сохраняется и
+          # возвращается GET-ом — до этого шага verified-путь Ozon не исполнялся
+          # ни одной автоматической проверкой.
+          code=$(curl -s --max-time 30 -o /tmp/v6.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"marketplace":"ozon","schemes":["fbo","rfbs"],"token":"ci-ozon-key-9012","client_id":"424242"}' "$base/v1/connections?$qs")
+          [ "$code" = "200" ] && grep -q '"status":"verified"' /tmp/v6.json
+          code=$(curl -s --max-time 10 -o /tmp/v7.json -w '%{http_code}' "$base/v1/connections?$qs")
+          grep -q '"marketplace":"ozon"' /tmp/v7.json \
+            && grep -q '"client_id":"424242"' /tmp/v7.json \
+            && grep -q '"schemes":\["fbo","rfbs"\]' /tmp/v7.json
+          ! grep -q 'ci-ozon-key' /tmp/v7.json
+          # Инвариант логов (формальное ревью 1.3): plaintext токенов НЕ в логе
+          # шлюза (маски «…1234/…5678» этих подстрок не содержат).
+          ! grep -q 'ci-plaintext-secret' /tmp/pult-gateway-3.log
+          ! grep -q 'ci-rotated-token' /tmp/pult-gateway-3.log
+          ! grep -q 'ci-ozon-key' /tmp/pult-gateway-3.log
           # Ровно одна строка WB (UNIQUE(organization_id, marketplace)).
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres psql -U pult -d pult -tAc \
             "SELECT count(*) FROM marketplace_connections WHERE marketplace='wildberries'" | grep -qx '1'
@@ -597,6 +623,7 @@ jobs:
             "SELECT count(*) FROM marketplace_connections \
              WHERE encode(token_ciphertext, 'escape') LIKE '%ci-plaintext-secret%' \
                 OR encode(token_ciphertext, 'escape') LIKE '%ci-rotated-token%' \
+                OR encode(token_ciphertext, 'escape') LIKE '%ci-ozon-key%' \
                 OR encode(token_nonce, 'escape') LIKE '%ci-%'" | grep -qx '0'
           # DELETE существующей строки → GET снова пуст.
           code=$(curl -s --max-time 10 -o /tmp/v4.json -w '%{http_code}' -X DELETE "$base/v1/connections/wildberries?$qs")

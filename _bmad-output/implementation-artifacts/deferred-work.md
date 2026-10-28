@@ -34,3 +34,15 @@ bmad-code-review / bmad-retrospective. Каждая запись обязана 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-marketplace-connect-token-vault.md`
   summary: B24-хендшейк (проверка подписи placement, ONAPPINSTALL) — не входит в epics.md Story 1.3
   evidence: deferred из 1.2 «write-on-GET до хендшейка» оставался с пометкой «хендшейк 1.3», но epics.md Story 1.3 содержит только мастер площадок + vault. Защита write-on-GET (краулеры создают «установки») остаётся открытой до отдельной сторис хендшейка (кандидат: Story 1.4-префикс или Epic 2) — реальный фикс: проверка подписи Б24 при регистрации приложения в Маркете (внешний контур владельца).
+
+## Deferred from: formal code review of spec-1-3-marketplace-connect-token-vault (2026-10-29, вечер)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-marketplace-connect-token-vault.md`
+  summary: AAD-привязка шифротекста к (organization_id, marketplace, key_version) в TokenCipher
+  evidence: Сейчас пара ciphertext+nonce пересаживаема между строками/организациями при компрометации записи БД — GCM-тег не ловит подмену контекста. Retrofit после накопления продовых шифротекстов невозможен без re-encrypt-прохода; правильное окно — до подключения первых пилотов (вместе с re-encrypt job / KMS-адаптером Epic 2). Владелец: Epic 2 hardening / сторис KMS.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-marketplace-connect-token-vault.md`
+  summary: Zeroize master-ключей в памяти (Drop/zeroize crate)
+  evidence: Ручной Debug защищает логи, но байты ключа остаются в памяти до освобождения (core dumps/swap). Усиление AD-16 уровня «defense in depth»; не блокирует Ф0 (ключ — env, перезапуск шлюза ротирует память). Владелец: Epic 2 hardening.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-marketplace-connect-token-vault.md`
+  summary: Advisory-lock на гонку POST(verified)/DELETE — ресуррект отозванного токена
+  evidence: DELETE, завершившийся одновременно с verified-POST (между пробами и save), оставляет строку с отозванным токеном. Требует pg_advisory_xact_lock(organization_id) — новая механика; Ф0: один Владелец на портал, сценарий редкий. Владелец: Epic 2 hardening (вместе с rate-limit 2.3).
