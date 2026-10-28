@@ -65,21 +65,26 @@ if (unclassifiable.length > 0) {
   fail(`неклассифицируемые module-ref (вне бюджета честно): ${unclassifiable.join(', ')}`, 2)
 }
 
-const jsFiles = [...initialRefs]
-  .map((ref) => join(dist, ref.replace(/^\//, '')))
-  .filter((path) => existsSync(path))
-
-if (jsFiles.length === 0) {
-  fail('JS-ассеты входных чанков отсутствуют в dist', 2)
+// Пути на диске: query-суффикс отсекается (есть у ref — не есть часть файла).
+// Каждый классифицированный ref обязан существовать в dist: отсутствующий
+// входной чанк — честный провал (exit 2), молчаливое выпадение из бюджета
+// недопустимо (иначе гейт занижает критический путь).
+const jsFiles = [...initialRefs].map((ref) => ({
+  ref,
+  path: join(dist, ref.replace(/\?.*$/, '').replace(/^\//, '')),
+}))
+const missing = jsFiles.filter((entry) => !existsSync(entry.path)).map((entry) => entry.ref)
+if (missing.length > 0) {
+  fail(`входные чанки отсутствуют в dist: ${missing.join(', ')} (stale/частичный dist?)`, 2)
 }
 
 let total = 0
 console.log(`[AD-30] bundle-size: входных JS-чанков ${jsFiles.length}, лимит ${limit} байт (gzip)`)
-for (const file of jsFiles) {
-  const gzipped = gzipSync(readFileSync(file)).length
+for (const entry of jsFiles) {
+  const gzipped = gzipSync(readFileSync(entry.path)).length
   total += gzipped
-  const rel = file.slice(dist.length + 1)
-  console.log(`  ${rel} → ${gzipped} байт (gzip, raw ${statSync(file).size})`)
+  const rel = entry.path.slice(dist.length + 1)
+  console.log(`  ${rel} → ${gzipped} байт (gzip, raw ${statSync(entry.path).size})`)
 }
 
 console.log(`Итого критический путь: ${total} / ${limit} байт (gzip)`)

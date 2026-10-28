@@ -8,7 +8,11 @@ CREATE TABLE users (
     external_ref    text,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (organization_id, external_ref)
+    UNIQUE (organization_id, external_ref),
+    -- Составная цель для FK из role_assignments: гарантирует на уровне БД,
+    -- что роль нельзя выдать пользователю ДРУГОЙ организации
+    -- (кросс-орг утечка прав исключена композитным ключом, а не приложением).
+    UNIQUE (organization_id, id)
 );
 
 CREATE INDEX idx_users_organization ON users (organization_id);

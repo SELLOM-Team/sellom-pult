@@ -65,8 +65,13 @@ pub enum EventTypeError {
 }
 
 fn validate_event_type(event_type: &str) -> Result<(), EventTypeError> {
-    let valid = !event_type.is_empty()
-        && !event_type.starts_with('_')
+    // Метка обязана начинаться со строчной латинской буквы: числовые/подчёркивающие
+    // старты ("42", "_x") — не имена событий. Остальное — snake_case-алфавит
+    // без двойных подчёркиваний и краевых подчёркиваний.
+    let valid = event_type
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase())
         && !event_type.ends_with('_')
         && !event_type.contains("__")
         && event_type
@@ -144,15 +149,27 @@ mod tests {
         let org = Uuid::now_v7();
         for bad in [
             "",
+            "42",
+            "4order_created",
             "OrgCreated",
             "org created",
             "org-created",
             "_created",
+            "created_",
             "created__ok",
         ] {
             let err =
                 EventEnvelope::new(bad, org, 1, json!(null)).expect_err("должен быть отклонён");
             assert_eq!(err, EventTypeError::InvalidEventType(bad.to_owned()));
+        }
+    }
+
+    #[test]
+    fn accepts_labels_with_digits_after_leading_letter() {
+        let org = Uuid::now_v7();
+        for good in ["order_2_shipped", "sync_finished", "f"] {
+            EventEnvelope::new(good, org, 1, json!(null))
+                .expect("строчная буква в старте + snake_case — валидно");
         }
     }
 }

@@ -67,8 +67,12 @@ impl ServiceConfig {
     fn from_lookup(
         get_var: impl Fn(&str) -> Result<String, VarError>,
     ) -> Result<Self, ConfigError> {
-        let database_url =
-            get_var("DATABASE_URL").map_err(|_| ConfigError::MissingEnv("DATABASE_URL"))?;
+        let database_url = get_var("DATABASE_URL").map_err(|e| match e {
+            VarError::NotPresent => ConfigError::MissingEnv("DATABASE_URL"),
+            VarError::NotUnicode(_) => {
+                ConfigError::InvalidEnv("DATABASE_URL", "значение не является Unicode".to_owned())
+            }
+        })?;
         let database_url = database_url.trim().to_owned();
         if database_url.is_empty() {
             return Err(ConfigError::InvalidEnv(
@@ -80,6 +84,7 @@ impl ServiceConfig {
         let http_port = match get_var("PULT_HTTP_PORT") {
             Ok(raw) => {
                 let port = raw
+                    .trim()
                     .parse::<u16>()
                     .map_err(|err| ConfigError::InvalidEnv("PULT_HTTP_PORT", err.to_string()))?;
                 if port == 0 {
@@ -100,7 +105,7 @@ impl ServiceConfig {
         };
 
         let environment = match get_var("PULT_ENV") {
-            Ok(raw) => Environment::parse(&raw)
+            Ok(raw) => Environment::parse(raw.trim())
                 .ok_or_else(|| ConfigError::InvalidEnv("PULT_ENV", raw.clone()))?,
             Err(VarError::NotPresent) => Environment::Dev,
             Err(VarError::NotUnicode(_)) => {
@@ -231,5 +236,30 @@ mod tests {
             err,
             ConfigError::InvalidEnv("PULT_ENV", "production".to_owned())
         );
+    }
+
+    #[test]
+    fn not_unicode_database_url_is_invalid_env_not_missing() {
+        // NotUnicode обязан отличаться от «не задана»: переменная есть, но её
+        // значение не читается — misleading-диагностика недопустима.
+        let err = ServiceConfig::from_lookup(|name| match name {
+            "DATABASE_URL" => Err(VarError::NotUnicode(OsString::from("pg://…"))),
+            _ => Err(VarError::NotPresent),
+        })
+        .expect_err("не-Unicode DATABASE_URL — явная ошибка значения");
+        assert!(matches!(err, ConfigError::InvalidEnv("DATABASE_URL", _)));
+    }
+
+    #[test]
+    fn port_and_env_are_trimmed() {
+        // Нормализация единая для всех переменных (DATABASE_URL уже тримится).
+        let cfg = ServiceConfig::from_lookup(lookup(&[
+            ("DATABASE_URL", "postgres://pult:pult@db/pult"),
+            ("PULT_HTTP_PORT", " 9090 "),
+            ("PULT_ENV", "prod "),
+        ]))
+        .expect("пробельные обводки значений не меняют семантику");
+        assert_eq!(cfg.http_port, 9090);
+        assert_eq!(cfg.environment, Environment::Prod);
     }
 }

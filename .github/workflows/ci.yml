@@ -82,6 +82,21 @@ jobs:
             echo "ожидался exit 1 (бюджет превышен), получен $code"; exit 1
           fi
           echo "негатив bundle-гейта отработал (exit 1)"
+      - name: негатив bundle-гейта — отсутствующий входной чанк обязан падать (exit 2)
+        working-directory: ${{ github.workspace }}
+        run: |
+          bad=$(mktemp -d)
+          printf '<script type="module" src="/real.js"></script>\n<script type="module" src="/ghost-missing.js"></script>\n' > "$bad/index.html"
+          printf 'console.log(1)\n' > "$bad/real.js"
+          set +e
+          node pult/platform/scripts/bundle-size.mjs "$bad" 200000 > /tmp/bundle-neg2.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/bundle-neg2.log
+          if [ "$code" -ne 2 ]; then
+            echo "ОШИБКА: ожидался exit 2 (чанк отсутствует — молчаливое выпадение из бюджета), получен $code"; exit 1
+          fi
+          echo "негатив bundle-гейта (отсутствующий чанк) отработал (exit 2)"
 
   gates:
     name: gates (hexagonal AD-1 + cache-adapter grep AD-28, PASS и FAIL)
@@ -93,6 +108,34 @@ jobs:
         run: node pult/platform/scripts/hexagonal-lint.mjs
       - name: valkey-grep — запрещённых образов кэша нет (PASS)
         run: node pult/platform/scripts/valkey-grep.mjs
+      - name: негатив hexagonal-lint — алиас через [workspace.dependencies] ловится (exit 1)
+        run: |
+          bad=$(mktemp -d)
+          mkdir -p "$bad/core/sneaky2/src"
+          printf '%s\n' \
+            '[workspace]' \
+            '[workspace.dependencies]' \
+            'bus = { path = "conveyor/action_bus" }' \
+            > "$bad/Cargo.toml"
+          printf '%s\n' \
+            '[package]' \
+            'name = "pult-core-sneaky2"' \
+            'version = "0.0.0"' \
+            'edition = "2024"' \
+            '' \
+            '[dependencies]' \
+            'bus = { workspace = true }' \
+            > "$bad/core/sneaky2/Cargo.toml"
+          printf '%s\n' 'use bus as _;' > "$bad/core/sneaky2/src/lib.rs"
+          set +e
+          node pult/platform/scripts/hexagonal-lint.mjs "$bad" > /tmp/hex-neg3.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/hex-neg3.log
+          if [ "$code" -ne 1 ]; then
+            echo "ОШИБКА: ожидался exit 1, получен $code — гейт пропускает workspace-алиас на конвейер"; exit 1
+          fi
+          echo "негатив hexagonal-lint (workspace-алиас) отработал (exit 1)"
       - name: негатив hexagonal-lint — dev-dep и use к конвейеру роняют гейт (exit 1)
         run: |
           bad=$(mktemp -d)
@@ -198,7 +241,7 @@ jobs:
         run: docker compose -f pult/deploy/docker-compose.yml logs --tail 60
       - name: собрать шлюз
         working-directory: pult
-        run: cargo build --bin pult-gateway
+        run: cargo build --bin pult-gateway --locked
       - name: запустить шлюз (миграции применяются на старте)
         working-directory: pult
         run: |
@@ -210,21 +253,23 @@ jobs:
       - name: /health → 200 (после применения миграций)
         run: |
           for i in $(seq 1 60); do
-            body=$(curl -s http://localhost:8080/health || true)
-            echo "$body"
-            echo "$body" | grep -q '"status":"ok"' && exit 0
+            code=$(curl -s -o /tmp/health-ok.json -w '%{http_code}' http://localhost:8080/health || true)
+            body=$(cat /tmp/health-ok.json 2>/dev/null || true)
+            echo "попытка $i: /health → $code $body"
+            if [ "$code" = "200" ] && echo "$body" | grep -q '"status":"ok"'; then exit 0; fi
             sleep 2
           done
-          echo "/health не ответил ok за 120 с"; exit 1
+          echo "/health не ответил 200 ok за 120 с"; exit 1
       - name: /ready → 200
         run: |
           for i in $(seq 1 30); do
-            body=$(curl -s http://localhost:8080/ready || true)
-            echo "$body"
-            echo "$body" | grep -q '"status":"ready"' && exit 0
+            code=$(curl -s -o /tmp/ready-ok.json -w '%{http_code}' http://localhost:8080/ready || true)
+            body=$(cat /tmp/ready-ok.json 2>/dev/null || true)
+            echo "попытка $i: /ready → $code $body"
+            if [ "$code" = "200" ] && echo "$body" | grep -q '"status":"ready"'; then exit 0; fi
             sleep 2
           done
-          echo "/ready не ответил ready за 60 с"; exit 1
+          echo "/ready не ответил 200 ready за 60 с"; exit 1
       - name: /health → 503 degraded и /ready → not_ready (флаг миграций жив) при недоступной БД
         run: |
           docker compose -f pult/deploy/docker-compose.yml stop postgres
@@ -235,25 +280,38 @@ jobs:
             if [ "$code" = "503" ] && grep -q '"status":"degraded"' /tmp/health.json; then break; fi
             sleep 2
           done
-          curl -s http://localhost:8080/ready > /tmp/ready.json || true
-          echo "$(< /tmp/ready.json)"
+          curl -s -o /tmp/ready.json -w '%{http_code}' http://localhost:8080/ready > /tmp/ready.code || true
+          ready_code=$(cat /tmp/ready.code 2>/dev/null || true)
+          echo "/ready → $ready_code $(cat /tmp/ready.json 2>/dev/null || true)"
           # БД возвращается в стек ДО ассертов: провал ассерта (bash -e) не должен
           # обрывать шаг раньше восстановления окружения.
           docker compose -f pult/deploy/docker-compose.yml start postgres
           [ "$code" = "503" ] && grep -q '"status":"degraded"' /tmp/health.json
+          [ "$ready_code" = "503" ]
           grep -q '"status":"not_ready"' /tmp/ready.json
           grep -q '"migrations_applied":true' /tmp/ready.json
-      - name: БД восстановилась → /health снова ok
+      - name: БД восстановилась → /health снова 200 ok
         run: |
           for i in $(seq 1 30); do
-            body=$(curl -s http://localhost:8080/health || true)
-            echo "$body"
-            echo "$body" | grep -q '"status":"ok"' && exit 0
+            code=$(curl -s -o /tmp/health-re.json -w '%{http_code}' http://localhost:8080/health || true)
+            body=$(cat /tmp/health-re.json 2>/dev/null || true)
+            echo "попытка $i: /health → $code $body"
+            if [ "$code" = "200" ] && echo "$body" | grep -q '"status":"ok"'; then exit 0; fi
             sleep 2
           done
           exit 1
+      - name: sentinel-строка до повторного подъёма (данные должны пережить up)
+        run: |
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -c "INSERT INTO organizations (name) VALUES ('ci-sentinel-survives-reup')"
       - name: повторный compose up не ломает данные
         run: docker compose -f pult/deploy/docker-compose.yml up -d --wait
+      - name: sentinel-строка пережила повторный up
+        run: |
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -tAc \
+            "SELECT count(*) FROM organizations WHERE name = 'ci-sentinel-survives-reup'" \
+            | grep -qx '1'
       - name: psql — ровно 4 таблицы Story 1.1 существуют
         run: |
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
@@ -269,16 +327,17 @@ jobs:
             nohup target/debug/pult-gateway > /tmp/pult-gateway-2.log 2>&1 &
           echo $! > /tmp/pult-gateway.pid
           for i in $(seq 1 30); do
-            health=$(curl -s http://localhost:8080/health || true)
-            ready=$(curl -s http://localhost:8080/ready || true)
-            echo "$health"; echo "$ready"
-            if echo "$health" | grep -q '"status":"ok"' && echo "$ready" | grep -q '"status":"ready"'; then
+            hcode=$(curl -s -o /tmp/h2.json -w '%{http_code}' http://localhost:8080/health || true)
+            rcode=$(curl -s -o /tmp/r2.json -w '%{http_code}' http://localhost:8080/ready || true)
+            echo "попытка $i: /health → $hcode $(cat /tmp/h2.json) / /ready → $rcode $(cat /tmp/r2.json)"
+            if [ "$hcode" = "200" ] && grep -q '"status":"ok"' /tmp/h2.json \
+              && [ "$rcode" = "200" ] && grep -q '"status":"ready"' /tmp/r2.json; then
               echo "свежий процесс шлюза вернулся в ready — повторные миграции прошли как no-op"
               exit 0
             fi
             sleep 2
           done
-          echo "шлюз не достиг /ready=ready за 60 с"; exit 1
+          echo "шлюз не достиг /health=200 + /ready=200 за 60 с"; exit 1
       - name: остановить шлюз
         if: always()
         run: |

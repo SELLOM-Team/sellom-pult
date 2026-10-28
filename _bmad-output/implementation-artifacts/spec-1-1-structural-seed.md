@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-10-28'
 status: 'done'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 baseline_commit: '35c2b774b8ec0ba1b048d85fbf39e6d9934dc3f2'
 story_key: '1-1-стартовый-каркас-приложения-и-structural-seed'
 context:
@@ -84,8 +84,55 @@ Greenfield: переиспользовать нечего; всё создаёт
 - Given SPA `npm run build`, when замерен критический путь, then gzip JS < 200 000 байт; каркас открывается в iframe-режиме с экраном «Начните подключение».
 - Верификация «установка из Маркета Б24» -- внешняя, владелец (нужен dev-аккаунт Б24); код поставляет iframe-вход + локальный dev-режим.
 
+### Review Findings
+
+Формальное код-ревью 28.10.2026 (bmad-code-review, 4 слоя: blind-hunter, edge-case-hunter, verification-gap, acceptance-auditor; дифф 35c2b77...b0d927a без lock-файлов; владелец делегировал применение патчей). Вердикты после триажа: 0 decision-needed / 24 patch / 1 defer / 14 rejected.
+
+- [x] [Review][Patch] db_reachable: быстрая ошибка запроса считается «БД жива» — timeout().is_ok() игнорирует Err запроса (auth-отказ → /health 200 ok) [pult/gateway/src/main.rs:58-62] — edge-case-hunter+verification-gap, high
+- [x] [Review][Patch] bundle-size: локальный .js-чанк, отсутствующий в dist, молча выпадает из бюджета (filter existsSync; ref с ?query тоже) [pult/platform/scripts/bundle-size.mjs:68-70] — blind-hunter+edge-case-hunter+verification-gap+acceptance-auditor, medium
+- [x] [Review][Patch] hexagonal-lint: core→conveyor через алиас [workspace.dependencies] ({ workspace = true }) не ловится — гейт не читает корневой манифест [pult/platform/scripts/hexagonal-lint.mjs] — verification-gap (воспроизведено синтетикой), medium
+- [x] [Review][Patch] hexagonal-lint: комментарии .rs не пропускаются (асимметрия с Cargo.toml — doc-комментарий о правиле AD-1 даст false positive) [pult/platform/scripts/hexagonal-lint.mjs:90] — blind-hunter, low
+- [x] [Review][Patch] hexagonal-lint: маркеры не покрывают gateway-крейт и path-формы (#[path] до conveyor/, 'gateway/', 'pult_gateway', 'gateway::') [pult/platform/scripts/hexagonal-lint.mjs:22-23] — blind-hunter+edge-case-hunter, low
+- [x] [Review][Patch] гейт-скрипты: ошибка чтения файла (битый symlink/права) даёт exit 1 — неотличимо от нарушения; нужен exit 2 [pult/platform/scripts/hexagonal-lint.mjs, valkey-grep.mjs] — edge-case-hunter, low
+- [x] [Review][Patch] valkey-grep: закомментированная строка `# image: redis:7` проходит — противоречит I/O-матрице («файл содержит») [pult/platform/scripts/valkey-grep.mjs:25] — acceptance-auditor (воспроизведено), low
+- [x] [Review][Patch] CI: HTTP-коды /health=200, /ready=200/503, восстановления и идемпотентности не ассертятся — только тела (шаги названы по кодам) [.github/workflows/ci.yml:210-227,246-254,271-281] — verification-gap, medium
+- [x] [Review][Patch] CI: шаг «повторный compose up не ломает данные» не проверяет данные — нужна sentinel-строка до/после [.github/workflows/ci.yml:255-256] — blind-hunter, low
+- [x] [Review][Patch] CI: integration build шлюза без --locked (rust-job с --locked, джобы расходятся) [.github/workflows/ci.yml:201] — acceptance-auditor, low
+- [x] [Review][Patch] gateway: connect_lazy на невалидном URL паникует; expect-сообщение ложно («не падает») [pult/gateway/src/main.rs:150-151] — blind-hunter+edge-case-hunter, medium
+- [x] [Review][Patch] config: DATABASE_URL NotUnicode отображается как «не задана» (у PORT/ENV явный InvalidEnv) [pult/platform/src/config.rs:70-71] — edge-case-hunter, low
+- [x] [Review][Patch] config: PULT_HTTP_PORT/PULT_ENV не тримятся — несогласованность с DATABASE_URL [pult/platform/src/config.rs:80-104] — blind-hunter, low
+- [x] [Review][Patch] gateway: пул без min_connections — после простоя (idle_timeout) /health может флапнуть degraded на холодном коннекте [pult/gateway/src/main.rs:147-149] — blind-hunter, low
+- [x] [Review][Patch] gateway: doc HealthResponse.status пропускает значение `ready` [pult/gateway/src/main.rs:47] — blind-hunter, low
+- [x] [Review][Patch] SPA: любой HTTP 200 считается gateway-up — HTML-фоллбек статик-хостинга даёт ложный «шлюз жив»; комментарии App.tsx («404») и vite.config («200») противоречат друг другу; нужна проверка Content-Type [pult/shells/bitrix24/src/App.tsx:25-31] — blind-hunter+edge-case-hunter, medium
+- [x] [Review][Patch] SPA: маппинг статус→фаза не покрыт тестами (инверсия веток пройдёт vitest+build+гейт) [pult/shells/bitrix24/src/App.tsx] — verification-gap+blind-hunter, medium
+- [x] [Review][Patch] SPA: мёртвое условие placement !== null (get() ?? undefined никогда не даёт null) [pult/shells/bitrix24/src/b24.ts:36] — blind-hunter, low
+- [x] [Review][Patch] миграции: role_assignments допускает кросс-орг запись (user из другой организации) — нужен составной FK (organization_id, user_id)→users(organization_id, id) + UNIQUE на users [pult/db/migrations/0002_users.sql, 0003_role_assignments.sql] — edge-case-hunter, medium
+- [x] [Review][Patch] compose: порты без 127.0.0.1-префикса открывают неаутентифицированные Valkey/PG/RabbitMQ в LAN [pult/deploy/docker-compose.yml] — edge-case-hunter, medium
+- [x] [Review][Patch] Cargo.toml: неиспользуемый tokio feature signal (graceful shutdown отклонён триажем) [pult/Cargo.toml] — blind-hunter+acceptance-auditor, low
+- [x] [Review][Patch] README: команда гейта в SPA-секции показана из неверного cwd (противоречит секции «Локальные гейты») [pult/README.md] — acceptance-auditor, low
+- [x] [Review][Patch] README: PULT_HTTP_PORT/PULT_ENV (дефолты/валидация) не документированы [pult/README.md] — blind-hunter, low
+- [x] [Review][Patch] events: validate_event_type пропускает метки без строчных букв ("42") [pult/platform/src/events.rs:67-77] — blind-hunter, low
+- [x] [Review][Defer] updated_at organizations/users/portal_settings без механизма обновления (триггер/конвенция) [pult/db/migrations/0001,0002,0004] — deferred: в Story 1.1 нет ни одного UPDATE-пути — колонка пока не может «врать»; первая сторис с UPDATE этих таблиц (кандидаты: 1.6 роли, portal_settings) обязана явно решить (триггер set_updated_at или SET updated_at в SQL) — записано в deferred-work.md
+
+Rejected (причины):
+- «Lock-файлы отсутствуют, CI упадёт» — false: git ls-files подтверждает pult/Cargo.lock и package-lock.json закоммичены; ревьюер видел дифф с осознанным scope-исключением lock-файлов.
+- «AD-30 не считает CSS» — бюджет AC определён как gzip JS входных чанков; расширение = правка спеки.
+- «registry-dep с именем ровно pult-conveyor» — гипотетика: такого крейта в реестре нет; ловится ревью.
+- «build.rs не сканируется» — в core/* нет ни одного build.rs; теоретический вектор.
+- «вложенные крейты core/<domain>/sub» — структура сида плоская, вложенных крейтов нет и не планируется.
+- «valkey-grep не ловит docker run/container:/JSON» — поверхность AC: *.yml/*.yaml/Dockerfile, image:/FROM; расширение = пересмотр контракта гейта (не этой сторис).
+- «нет ESLint/Prettier» — вне AC спеки (tsc+vitest+bundle-гейт — заявленный контур).
+- «нет cargo audit/npm audit» — вне AC Story 1.1; кандидат на усиление Epic 2+.
+- «MSRV не объявлен» — rust-toolchain.toml уже единственный источник пина; второй источник = риск дрейфа.
+- «EventEnvelope::new без from_parts» — YAGNI для сида; потребитель (реплей/детерминированные тесты) появится в Story 1.4.
+- «release-профиль lto не тренируется CI» — release-сборок в сиде нет; блок — заглядывание вперёд.
+- «вечный ретрай при неисправимых миграциях» — спека предписывает ретрай-луп; отказ логируется громко; различение transient/permanent — усложнение сида.
+- «claim: 9 тестов, а функций 10» — claim точен: 9 веточных тестов from_lookup + 1 тест Environment::parse = 10 функций.
+- «подставные ${VAR}-образы проходят valkey-grep» — верифицированное ограничение, вхождений в репо нет; вопрос политики для будущих параметризованных манифестов.
+
 ## Implementation Notes
 
+- 2026-10-28, формальное код-ревью (bmad-code-review, 4 слоя, владелец делегировал применение патчей): 24 patch применены + 1 defer + 14 rejected (см. Review Findings выше). Ключевое: db_reachable теперь проверяет и Result запроса (быстрая ошибка ≠ «БД жива»); connect_lazy-невалидный URL — чистый exit 1 с маскировкой пароля (redact_url) вместо паники; составной FK (organization_id, user_id)→users(organization_id, id) закрывает кросс-орг утечку ролей — 0002/0003 отредактированы на месте (постоянных развёртываний нет, CI гоняет миграции с нуля); гейты AD-1/AD-28/AD-30 закрыты на алиас-обход [workspace.dependencies], закомментированные образы и тихое выпадение отсутствующих чанков (с самотестами в CI в обе стороны); SPA-семантика: только JSON-ответ шлюза = «шлюз жив» (health.ts + 5 тестов); compose-порты на 127.0.0.1; CI ассертит HTTP-коды /health и /ready и sentinel-строку данных через повторный up. Верификация: fmt/clippy/-D warnings чисто; 25 Rust-тестов (gateway 5 + platform 20) + 9 SPA-тестов зелены; bundle 69 604 < 200 000; гейты PASS на репо + 8 негативных направлений (включая 5 новых); degraded-режим и невалидный-URL живьём; YAML валиден; Cargo.lock перегенерирован (−errno, −signal-hook-registry после снятия feature signal).
 - 2026-10-28, dev-субагент: Structural Seed поставлен по Code Map; `sqlx::migrate!` путь `../db/migrations` (в Code Map была опечатка `../../` — из pult/gateway один уровень до pult/db); Rust 1.99.1 установлен rustup'ом в песочнице; версии SPA (Vite 8.3.5 / React 19.3.1 / TS 5.9.3) верифицированы реестром; Cargo.lock и package-lock.json закоммичены.
 - 2026-10-28, оркестратор (верификация по диффу): локальные проверки воспроизведены — cargo build/clippy/test 11 тестов зелены; гейты PASS на каркасе и FAIL на инъекциях (exit=1 все три, включая негатив bundle-size с лимитом 1000); degraded-режим живьём: /health→503 {"status":"degraded","version":"0.1.0"}, /ready→503 not_ready, шлюз жив, ретрай миграций в логе.
 - 2026-10-28, оркестратор (фиксы первого CI-прогона 035a781): (1) spa-job — шаг bundle-гейта резолвил пути относительно job-дефолта pult/shells/bitrix24 → добавлен шаговый `working-directory: ${{ github.workspace }}`; (2) integration-job — postgres:18 exited(1): образ сменил каталог данных (web-верифицировано 28.10.2026), volume перемонтирован `pgdata:/var/lib/postgresql` (было `/var/lib/postgresql/data`), добавлен диагностический шаг `compose logs` при failure.

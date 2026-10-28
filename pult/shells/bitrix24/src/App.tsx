@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ConnectionStatus, type ConnectionPhase } from './ConnectionStatus'
 import { Skeleton } from './components/Skeleton'
 import { readPlacementContext } from './b24'
+import { phaseFromHealthResponse } from './health'
 
 /**
  * Экран входа каркаса: «Начните подключение» (Story 1.1).
@@ -20,14 +21,13 @@ export default function App() {
     const timeout = setTimeout(() => controller.abort(), 1500)
 
     // Dev-удобство: пробуем /health шлюза через Vite-прокси (→ localhost:8080).
-    // Честная семантика: 200 → шлюз жив; 503 → шлюз жив, но БД degraded;
-    // любой другой код (в т.ч. SPA-fallback 404 без прокси) → шлюза нет.
+    // Честная семантика (health.ts): только JSON-ответ шлюза считается ответом
+    // шлюза — 200+JSON → жив; 503+JSON → жив, но БД degraded; всё прочее
+    // (в т.ч. HTML-фоллбек статик-хостинга с кодом 200) → шлюза нет.
     fetch('/health', { signal: controller.signal })
       .then((res) => {
         if (cancelled) return
-        if (res.status === 200) setPhase('gateway-up')
-        else if (res.status === 503) setPhase('gateway-degraded')
-        else setPhase('offline')
+        setPhase(phaseFromHealthResponse(res.status, res.headers.get('content-type')))
       })
       .catch(() => {
         if (!cancelled) setPhase('offline')

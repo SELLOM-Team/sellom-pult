@@ -28,7 +28,8 @@ export function readPlacementContext(
   const lang = params.get('LANG') ?? undefined
   const rawOptions = params.get('PLACEMENT_OPTIONS') ?? undefined
   return {
-    embedded: placement !== undefined && placement !== null && placement !== '',
+    // placement здесь string | undefined (get() ?? undefined): null недостижим.
+    embedded: placement !== undefined && placement !== '',
     placement,
     lang,
     rawOptions,

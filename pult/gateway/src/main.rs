@@ -44,7 +44,7 @@ struct AppState {
 /// Тело ответа /health и /ready.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct HealthResponse {
-    /// `ok` | `degraded` | `not_ready`.
+    /// `ok` | `degraded` (/health) | `ready` | `not_ready` (/ready).
     status: &'static str,
     /// Версия приложения.
     version: &'static str,
@@ -53,12 +53,30 @@ struct HealthResponse {
     migrations_applied: Option<bool>,
 }
 
-/// Живая проверка: пул должен ответить на тривиальный запрос за бюджет
+/// Живая проверка: пул должен УСПЕШНО ответить на тривиальный запрос за бюджет
 /// (tokio-timeout поверх попытки пула — поток ответа не блокируется).
+/// Важно: проверяется и внешний Ok (уложились в бюджет), и внутренний Result
+/// самого запроса — быстрая ошибка (auth-отказ, shutdown PG) ≠ «БД жива».
 async fn db_reachable(db: &PgPool) -> bool {
-    tokio::time::timeout(DB_PROBE_TIMEOUT, sqlx::query("SELECT 1").execute(db))
-        .await
-        .is_ok()
+    matches!(
+        tokio::time::timeout(DB_PROBE_TIMEOUT, sqlx::query("SELECT 1").execute(db)).await,
+        Ok(Ok(_))
+    )
+}
+
+/// Маскирует пароль в строке подключения для логов: схема://user:***@host/…
+/// (в логах не должно быть креденшелов даже при невалидном URL).
+fn redact_url(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, rest)) => match rest.split_once('@') {
+            Some((userinfo, hostpart)) => {
+                let user = userinfo.split(':').next().unwrap_or("");
+                format!("{scheme}://{user}:***@{hostpart}")
+            }
+            None => format!("{scheme}://{rest}"),
+        },
+        None => "***".to_owned(),
+    }
 }
 
 /// `/health` — liveness с проверкой БД: 200 `ok` или 503 `degraded`.
@@ -144,11 +162,23 @@ async fn main() {
 
     // connect_lazy: шлюз поднимается даже если БД ещё не готова (состязание
     // с compose --wait) — /health покажет degraded, миграции повторяются.
+    // min_connections(1): проба /health не меряет холодный TCP+auth-коннект
+    // после простоя (idle_timeout закрывает незанятые соединения) — тёплая
+    // связь удерживается пулом в фоне, не блокируя старт.
+    // URL парсится уже в connect_lazy: синтаксически битая строка — чистый
+    // выход с диагностикой, не паника.
     let db = PgPoolOptions::new()
         .max_connections(5)
+        .min_connections(1)
         .acquire_timeout(Duration::from_secs(3))
         .connect_lazy(&config.database_url)
-        .expect("connect_lazy не выполняет подключение и не падает");
+        .unwrap_or_else(|err| {
+            error!(
+                "DATABASE_URL невалидна (connect_lazy): {err} — строка: {}",
+                redact_url(&config.database_url)
+            );
+            std::process::exit(1);
+        });
 
     let migrations_applied = Arc::new(AtomicBool::new(false));
     tokio::spawn(run_migrations(db.clone(), Arc::clone(&migrations_applied)));
@@ -213,5 +243,23 @@ mod tests {
         let value = serde_json::to_value(&ready).expect("сериализуемо");
         assert_eq!(value["status"], "not_ready");
         assert_eq!(value["migrations_applied"], false);
+    }
+
+    #[test]
+    fn redact_url_masks_password() {
+        assert_eq!(
+            redact_url("postgres://pult:secret@localhost:5432/pult"),
+            "postgres://pult:***@localhost:5432/pult"
+        );
+    }
+
+    #[test]
+    fn redact_url_handles_passwordless_and_broken() {
+        assert_eq!(
+            redact_url("postgres://localhost/pult"),
+            "postgres://localhost/pult"
+        );
+        // Битая строка без схемы не раскрывает содержимое в лог.
+        assert_eq!(redact_url("not a url at all"), "***");
     }
 }

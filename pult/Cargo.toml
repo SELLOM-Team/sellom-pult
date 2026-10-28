@@ -25,7 +25,9 @@ publish = false
 
 [workspace.dependencies]
 # --- стек зафиксирован (AD-20): Rust 1.99.1 (rust-toolchain.toml) ---
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+# feature signal не включён: graceful shutdown отклонён триажем Story 1.1 —
+# добавляется вместе с обработкой SIGTERM, когда она появится.
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time"] }
 axum = "0.8.9"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate"] }
 

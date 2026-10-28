@@ -12,7 +12,7 @@ export type ConnectionPhase =
   | 'checking'
   /** /health шлюза ответил 200 — каркас запущен вместе с dev-стеком. */
   | 'gateway-up'
-  /** /health ответил не-200 — шлюз жив, но БД degraded (честно показываем). */
+  /** /health ответил 503 + JSON — шлюз жив, но БД degraded (честно показываем). */
   | 'gateway-degraded'
   /** Шлюз недоступен — открыт чисто локальный dev-режим без бэкенда. */
   | 'offline'

@@ -18,9 +18,26 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Конвейер и оболочки, а также их возможные будущие crate-имена — запрещены ядру.
-const FORBIDDEN_TOML_MARKERS = ['pult-conveyor-', 'pult-shell-', 'conveyor/', 'shells/']
-const FORBIDDEN_RS_IDENTIFIERS = ['pult_conveyor', 'pult_shell', 'shells::']
+// Конвейер и оболочки (включая шлюз — composition root), а также их возможные
+// будущие crate-имена — запрещены ядру. path-формы ловят переименованные
+// path-dep ключи (adapters = { path = "../../conveyor/adapters" }).
+const FORBIDDEN_TOML_MARKERS = [
+  'pult-conveyor-',
+  'pult-shell-',
+  'pult-gateway',
+  '/gateway',
+  'conveyor/',
+  'shells/',
+]
+const FORBIDDEN_RS_IDENTIFIERS = [
+  'pult_conveyor',
+  'pult_shell',
+  'pult_gateway',
+  'gateway::',
+  'conveyor/',
+  'shells/',
+  'shells::',
+]
 
 function pultRoot() {
   const arg = process.argv[2]
@@ -67,15 +84,57 @@ function stripTomlComments(text) {
     .join('\n')
 }
 
+// Постатейные комментарии .rs (//, ///, //!) в начале строки — не код:
+// doc-комментарий, объясняющий правило AD-1, не нарушение. Внутристрочные
+// // не срезаются (консервативно для запрещающего гейта).
+function stripFullLineRsComments(source) {
+  return source
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n')
+}
+
+// Чтение с честным кодом: ошибка скана (права/битый symlink) ≠ нарушение.
+function readOrDie(file, gateLabel) {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch (err) {
+    console.error(`[${gateLabel}] ошибка чтения ${file}: ${err.message}`)
+    process.exit(2)
+  }
+}
+
 const violations = []
+
+// 0. Корневой workspace-манифест: [workspace.dependencies] с path на
+// conveyor//shells//gateway даёт ядру алиас-обход ({ workspace = true }) —
+// корень не должен реэкспортировать запрещённые пути.
+const rootManifestPath = join(root, 'Cargo.toml')
+if (existsSync(rootManifestPath)) {
+  const rootManifest = stripTomlComments(readOrDie(rootManifestPath, 'AD-1'))
+  const workspaceSection = rootManifest.split('[workspace.dependencies]')[1]
+  if (workspaceSection) {
+    // Секция кончается на следующей [таблице] или конец файла.
+    const sectionBody = workspaceSection.split(/^\[.*\]$/m)[0]
+    for (const marker of ['conveyor/', 'shells/', '/gateway', 'pult-gateway']) {
+      if (sectionBody.includes(marker)) {
+        violations.push({
+          crate: '(workspace)',
+          file: 'Cargo.toml',
+          detail: `[workspace.dependencies] ведёт на запрещённый путь («${marker}») — алиас-обход границы ядра`,
+        })
+      }
+    }
+  }
+}
 
 for (const crate of crates) {
   const crateDir = join(coreDir, crate)
 
-  // 1. Манифест: зависимости от конвейера/оболочек запрещены.
+  // 1. Манифест: зависимости от конвейера/оболочек/шлюза запрещены.
   const manifestPath = join(crateDir, 'Cargo.toml')
   if (existsSync(manifestPath)) {
-    const manifest = stripTomlComments(readFileSync(manifestPath, 'utf8'))
+    const manifest = stripTomlComments(readOrDie(manifestPath, 'AD-1'))
     for (const marker of FORBIDDEN_TOML_MARKERS) {
       if (manifest.includes(marker)) {
         violations.push({ crate, file: `core/${crate}/Cargo.toml`, detail: `зависимость/упоминание «${marker}»` })
@@ -83,17 +142,17 @@ for (const crate of crates) {
     }
   }
 
-  // 2. Исходники: импорты и любые пути к конвейеру/оболочкам запрещены.
+  // 2. Исходники: импорты и любые пути к конвейеру/оболочкам/шлюзу запрещены.
   const srcDir = join(crateDir, 'src')
   if (existsSync(srcDir)) {
     for (const file of listRsFiles(srcDir)) {
-      const source = readFileSync(file, 'utf8')
+      const source = stripFullLineRsComments(readOrDie(file, 'AD-1'))
       for (const identifier of FORBIDDEN_RS_IDENTIFIERS) {
         if (source.includes(identifier)) {
           violations.push({
             crate,
             file: file.slice(root.length + 1),
-            detail: `использование «${identifier}» (use/путь к конвейеру или оболочке)`,
+            detail: `использование «${identifier}» (use/путь к конвейеру, оболочке или шлюзу)`,
           })
         }
       }
@@ -102,9 +161,9 @@ for (const crate of crates) {
 }
 
 if (violations.length > 0) {
-  console.error('[AD-1] hexagonal-lint: НАРУШЕНИЕ ГРАНИЦЫ ЯДРА — core/* не может зависеть от conveyor/* и shells/*')
+  console.error('[AD-1] hexagonal-lint: НАРУШЕНИЕ ГРАНИЦЫ ЯДРА — core/* не может зависеть от conveyor/*, shells/* и gateway')
   for (const v of violations) {
-    console.error(`  - крейт pult-core-${v.crate}: ${v.file} — ${v.detail}`)
+    console.error(`  - крейт ${v.crate === '(workspace)' ? 'workspace' : `pult-core-${v.crate}`}: ${v.file} — ${v.detail}`)
   }
   console.error(`Итого нарушений: ${violations.length}`)
   process.exit(1)

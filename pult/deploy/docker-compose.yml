@@ -17,7 +17,8 @@ services:
       POSTGRES_DB: pult
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     ports:
-      - "5432:5432"
+      # Только loopback: dev-стек с pult/pult-кредами не должен быть виден в LAN.
+      - "127.0.0.1:5432:5432"
     volumes:
       # postgres:18 сменил каталог данных (breaking change образа):
       # volume монтируется в /var/lib/postgresql (в ≤17 был /var/lib/postgresql/data);
@@ -37,8 +38,9 @@ services:
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - rabbitdata:/var/lib/rabbitmq
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      # Только loopback (см. postgres): AMQP и management UI не наружу.
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -50,7 +52,8 @@ services:
     image: valkey/valkey:9.1
     command: ["valkey-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      # Только loopback (см. postgres): RESP без аутентификации — только localhost.
+      - "127.0.0.1:6379:6379"
     volumes:
       - valkeydata:/data
     healthcheck:

@@ -26,6 +26,23 @@ const IMAGE_LINE = /^\s*(?:-\s*)?image:\s*(.+?)\s*$/
 const FROM_LINE = /^\s*FROM\s+(.+?)\s*$/i
 const WORD_RE = new RegExp(`\\b${FORBIDDEN}\\b`, 'i')
 
+// Zero-tolerance AD-28 (I/O-матрица: «файл СОДЕРЖИТ image: ...redis»):
+// закомментированная строка тоже проверяется — снимаем маркер комментария
+// перед сопоставлением, чтобы `# image: redis:7` не проходил молча.
+function uncomment(line) {
+  return line.replace(/^[ \t]*#[ \t]*/, '')
+}
+
+// Чтение с честным кодом: ошибка скана (права/битый symlink) ≠ нарушение.
+function readOrDie(file) {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch (err) {
+    console.error(`[AD-28] ошибка чтения ${file}: ${err.message}`)
+    process.exit(2)
+  }
+}
+
 function repoRoot() {
   const arg = process.argv[2]
   if (arg) return resolve(arg)
@@ -57,14 +74,15 @@ if (!existsSync(root)) {
 const violations = []
 
 for (const file of listScanFiles(root)) {
-  const lines = readFileSync(file, 'utf8').split('\n')
-  lines.forEach((line, idx) => {
+  const lines = readOrDie(file).split('\n')
+  lines.forEach((rawLine, idx) => {
+    const line = uncomment(rawLine)
     const isDockerfile = basename(file).startsWith('Dockerfile')
     const match = isDockerfile ? line.match(FROM_LINE) : line.match(IMAGE_LINE)
     if (!match) return
     const value = match[1].replace(/["']/g, '')
     if (WORD_RE.test(value)) {
-      violations.push({ file: file.slice(root.length + 1), line: idx + 1, raw: line.trim() })
+      violations.push({ file: file.slice(root.length + 1), line: idx + 1, raw: rawLine.trim() })
     }
   })
 }
