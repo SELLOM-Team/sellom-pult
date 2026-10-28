@@ -19,7 +19,10 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 сменил каталог данных (breaking change образа):
+      # volume монтируется в /var/lib/postgresql (в ≤17 был /var/lib/postgresql/data);
+      # PGDATA внутри — /var/lib/postgresql/18/docker (проверено 28.10.2026).
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pult -d pult"]
       interval: 5s

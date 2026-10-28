@@ -54,6 +54,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: bundle-size gate (критический путь < 200 КБ gzip)
+        # шаговый working-directory переопределяет job-дефолт (pult/shells/bitrix24):
+        # пути к скрипту и dist — от корня репозитория.
+        working-directory: ${{ github.workspace }}
         run: node pult/platform/scripts/bundle-size.mjs pult/shells/bitrix24/dist 200000
 
   gates:
@@ -78,6 +81,9 @@ jobs:
           workspaces: pult
       - name: dev-stack up --wait (PG 18, RabbitMQ 4.4 quorum, Valkey 9.1)
         run: docker compose -f pult/deploy/docker-compose.yml up -d --wait
+      - name: диагностика контейнеров при сбое подъёма
+        if: failure()
+        run: docker compose -f pult/deploy/docker-compose.yml logs --tail 60
       - name: собрать шлюз
         working-directory: pult
         run: cargo build --bin pult-gateway

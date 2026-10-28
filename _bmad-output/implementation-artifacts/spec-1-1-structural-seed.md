@@ -65,16 +65,16 @@ Greenfield: переиспользовать нечего; всё создаёт
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `pult/Cargo.toml`, `rust-toolchain.toml`, `.gitignore`-дополнения -- воркспейс на 13 крейтов, edition 2024, пины версий AD-20 -- единая точка сборки
-- [ ] `pult/platform/` -- конверты событий/ошибок/конфиг -- общий язык доменов
-- [ ] `pult/core/*` (7 крейтов) + `pult/conveyor/*` (4 крейта) -- lib + ports.rs заготовки -- AR-2/AR-3
-- [ ] `pult/gateway/` -- Axum-бин: `/health`, `/ready`, миграции на старте -- проверяемый жизненный цикл
-- [ ] `pult/db/migrations/0001..0004` -- 4 таблицы, FK users→organizations, role_assignments→organizations/users, portal_settings→organizations -- только нужды Story 1.1
-- [ ] `pult/deploy/` -- compose + rabbitmq.conf (quorum) -- AC «compose поднимает стек»
-- [ ] `pult/platform/scripts/` -- 3 гейт-скрипта -- AD-1/AD-28/AD-30 как исполняемые проверки
-- [ ] `pult/shells/bitrix24/` -- SPA-каркас: entry «Начните подключение», health-заглушка, скелетон -- AC SPA < 200 КБ gzip
-- [ ] `.github/workflows/ci.yml` -- 4 jobs со всеми гейтами -- AC CI
-- [ ] `pult/README.md` -- запуск dev-стека одной командой -- DX следующего агента
+- [x] `pult/Cargo.toml`, `rust-toolchain.toml`, `.gitignore`-дополнения -- воркспейс на 13 крейтов, edition 2024, пины версий AD-20 -- единая точка сборки
+- [x] `pult/platform/` -- конверты событий/ошибок/конфиг -- общий язык доменов
+- [x] `pult/core/*` (7 крейтов) + `pult/conveyor/*` (4 крейта) -- lib + ports.rs заготовки -- AR-2/AR-3
+- [x] `pult/gateway/` -- Axum-бин: `/health`, `/ready`, миграции на старте -- проверяемый жизненный цикл
+- [x] `pult/db/migrations/0001..0004` -- 4 таблицы, FK users→organizations, role_assignments→organizations/users, portal_settings→organizations -- только нужды Story 1.1
+- [x] `pult/deploy/` -- compose + rabbitmq.conf (quorum) -- AC «compose поднимает стек» (фикс volume-пути postgres:18 — см. Implementation Notes)
+- [x] `pult/platform/scripts/` -- 3 гейт-скрипта -- AD-1/AD-28/AD-30 как исполняемые проверки
+- [x] `pult/shells/bitrix24/` -- SPA-каркас: entry «Начните подключение», health-заглушка, скелетон -- AC SPA < 200 КБ gzip (69 534 Б gzip — PASS)
+- [x] `.github/workflows/ci.yml` -- 4 jobs со всеми гейтами -- AC CI (фикс путей spa-job — см. Implementation Notes)
+- [x] `pult/README.md` -- запуск dev-стека одной командой -- DX следующего агента
 
 **Acceptance Criteria:**
 - Given чистая машина с rustup, when `cargo build --workspace` в `pult/`, then сборка проходит без ошибок; `cargo clippy --workspace -- -D warnings` и `cargo test --workspace` чисты.
@@ -85,6 +85,11 @@ Greenfield: переиспользовать нечего; всё создаёт
 - Верификация «установка из Маркета Б24» -- внешняя, владелец (нужен dev-аккаунт Б24); код поставляет iframe-вход + локальный dev-режим.
 
 ## Implementation Notes
+
+- 2026-10-28, dev-субагент: Structural Seed поставлен по Code Map; `sqlx::migrate!` путь `../db/migrations` (в Code Map была опечатка `../../` — из pult/gateway один уровень до pult/db); Rust 1.99.1 установлен rustup'ом в песочнице; версии SPA (Vite 8.3.5 / React 19.3.1 / TS 5.9.3) верифицированы реестром; Cargo.lock и package-lock.json закоммичены.
+- 2026-10-28, оркестратор (верификация по диффу): локальные проверки воспроизведены — cargo build/clippy/test 11 тестов зелены; гейты PASS на каркасе и FAIL на инъекциях (exit=1 все три, включая негатив bundle-size с лимитом 1000); degraded-режим живьём: /health→503 {"status":"degraded","version":"0.1.0"}, /ready→503 not_ready, шлюз жив, ретрай миграций в логе.
+- 2026-10-28, оркестратор (фиксы первого CI-прогона 035a781): (1) spa-job — шаг bundle-гейта резолвил пути относительно job-дефолта pult/shells/bitrix24 → добавлен шаговый `working-directory: ${{ github.workspace }}`; (2) integration-job — postgres:18 exited(1): образ сменил каталог данных (web-верифицировано 28.10.2026), volume перемонтирован `pgdata:/var/lib/postgresql` (было `/var/lib/postgresql/data`), добавлен диагностический шаг `compose logs` при failure.
+- Внешние верификации (владелец/CI): зелёный CI-прогон после фиксов (строка матрицы «миграции идемпотентны» покрывается job-ой integration); установка из Маркета Б24 — dev-аккаунт владельца.
 
 ## Spec Change Log
 
