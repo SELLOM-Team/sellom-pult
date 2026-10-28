@@ -175,3 +175,20 @@ Stage Summary:
 - Ключевая структура поставки ценности: онбординг → конвейер целостности → панель → канбан → остатки → финансы → команда → штурман → тарифы; каждая эпика автономно поставляет ценность.
 - Сторис ссылаются на решение 8.1 (Ozon обе схемы чтения) в 1.3/2.2/4.1/4.2 и мандаты AD-20 (Rust), AD-28 (Valkey), AD-29 (k6-профиль 1000), AD-30 (бюджеты фронтенда).
 - Следующий шаг: bmad-sprint-planning (спринты из epics.md) → bmad-build (Amelia, Rust-монорепа pult/). Опционально по запросу владельца: глубокое независимое ревью epics.md (как у PRD/spine).
+
+---
+Task ID: 10
+Agent: main (Z.ai) + John (PM, bmad-sprint-planning)
+Task: BMAD-воркфлоу bmad-sprint-planning (headless): гейт готовности к реализации + генерация sprint-status.yaml из epics.md.
+
+Work Log:
+- Протокол начала сессии: MEMORY → worklog → git status/log (HEAD 378d75d, origin/main синхронизирован, дерево чистое). Прочитана docs/RECOVERY.md (сценарий A применён корректно).
+- Активация скилла: resolve_customization (пусто — defaults) + resolve_config (Z, RU, Пульт селлера, planning/implementation artifacts разрешены).
+- Гейт готовности (readiness-gate.md): инвентарь полный (концепция v1.2 → brief → PRD final 35 FR → spine final 30 AD → epics.md final 9/39); трассировка двусторонняя без сирот (карта 35/35 FR, сторис→FR-N+AD-N через 14 AR); эпики — user value, forward-зависимостей нет (starter 1.1); UX-артефакт отсутствует, но промежуточный UX-контракт ЗАПИСАН в epics.md (§ UX Design Requirements: следствия FR + AD-30 + NFR-3/6, UX-валидация M1/M2 до их спринтов) — решения не «придумываются». Вердикт: PASS.
+- Генерация трекинга (generate-tracking.md): эпик-файл один — _bmad-output/planning-artifacts/epics.md (шардированной версии нет). Dry-run: ok, 9 эпиков / 39 сторис, сирот/illegal нет; 2 warning'а — заголовок документа и обзорная секция «Epic List» (не эпики; все 9 настоящих распознаны) — пропуск принят осознанно.
+- Боевая генерация: _bmad-output/implementation-artifacts/sprint-status.yaml создан (generated 10-28-2026 13:02): 48 backlog (39 сторис + 9 ретро optional), tracking_system file-system, story_location _bmad-output/implementation-artifacts; пост-валидация скрипта ok.
+
+Stage Summary:
+- Пятый BMAD-артефакт: sprint-status.yaml — трекинг 9 эпиков / 39 сторис; гейт готовности PASS.
+- Все фазы planning завершены: brief → PRD → spine → epics → sprint-status. Ворота в разработку открыты.
+- Следующий шаг: bmad-build — Story 1.1 (Стартовый каркас приложения и Structural Seed spine: Rust-монорепа pult/ по AD-20/28/29/30).

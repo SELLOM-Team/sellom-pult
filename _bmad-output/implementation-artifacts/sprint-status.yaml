@@ -1,0 +1,102 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 10-28-2026 13:02
+last_updated: 10-28-2026 13:02
+project: Пульт селлера
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: backlog
+  1-1-стартовый-каркас-приложения-и-structural-seed: backlog
+  1-2-шаг-0-фильтр-периметра-ваш-бизнес: backlog
+  1-3-мастер-подключения-площадок-с-token-vault-шаги-1-3: backlog
+  1-4-первичный-синк-истории-и-первый-канбан: backlog
+  1-5-маппинг-номенклатуры-при-онбординге-шаг-4: backlog
+  1-6-пороги-алертов-и-роли-команды-шаги-5-6: backlog
+  1-7-демо-кабинет-1: backlog
+  1-8-виджет-б24-остатки-и-статус-дня: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-адаптер-wb-полной-глубины-и-rate-limit-менеджер: backlog
+  2-2-адаптер-ozon-чтение-обеих-схем-и-вебхуки: backlog
+  2-3-адаптивное-расписание-fair-scheduling-и-квоты-вызовов: backlog
+  2-4-ежечасная-сверка-контрольных-сумм-и-авто-восстановление: backlog
+  2-5-журнал-целостности-в-приложении-и-статус-страница: backlog
+  2-6-sla-компенсация-месяц-подписки: backlog
+  2-7-action-bus-и-обратная-запись-статусов-отгрузок-wb: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-индекс-здоровья-0-100: backlog
+  3-2-ключевые-цифры-и-мини-карта-площадок: backlog
+  3-3-очередь-что-сделать-сегодня: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-канбан-доска-всех-заказов-и-схем: backlog
+  4-2-sla-таймеры-отгрузки-с-подсветкой-и-авто-инцидентом: backlog
+  4-3-ручное-перемещение-заказов-по-колонкам: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-витрина-остатков-по-sku-с-аналитикой: backlog
+  5-2-маппинг-с-обучением-на-подтверждениях: backlog
+  5-3-очередь-разборов-и-bulk-маппинг: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-финдвижок-полной-стоимости-sku: backlog
+  6-2-чистая-маржа-по-заказу-sku-категории-каналу: backlog
+  6-3-календарь-выплат-wb-и-ozon: backlog
+  6-4-фоновая-сверка-денег-с-суммой-ущерба: backlog
+  6-5-себестоимость-единицы: backlog
+  6-6-налоговый-радар: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-движок-правил-задачи-из-событий: backlog
+  7-2-матрица-ролей-и-pii-границы-enforcement: backlog
+  7-3-правила-роботы-перемещения-заказов-через-action-bus: backlog
+  7-4-журнал-инцидентов-что-случилось-кто-спас-сколько-сэкономлено: backlog
+  epic-7-retrospective: optional
+
+  epic-8: backlog
+  8-1-детектор-аномалий-правила-статистика: backlog
+  8-2-утренний-брифинг-к-8-00: backlog
+  8-3-дайджест-изменений-правил-m11-лайт: backlog
+  epic-8-retrospective: optional
+
+  epic-9: backlog
+  9-1-пер-тенант-квоты-и-тарифная-сетка-enforcement: backlog
+  9-2-витрина-тарифов-с-заглушкой-ии-роль: backlog
+  epic-9-retrospective: optional
