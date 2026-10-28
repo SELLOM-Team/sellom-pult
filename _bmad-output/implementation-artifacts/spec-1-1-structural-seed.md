@@ -2,7 +2,7 @@
 title: 'Story 1.1 — Стартовый каркас приложения и Structural Seed'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '35c2b774b8ec0ba1b048d85fbf39e6d9934dc3f2'
@@ -94,6 +94,48 @@ Greenfield: переиспользовать нечего; всё создаёт
 ## Spec Change Log
 
 ## Review Triage Log
+
+Ревью 28.10.2026 (3 слоя: blind-hunter, edge-case-hunter, verification-gap). Вердикты: high/medium/low/false/maybe-false; маршруты: patch / отклонено.
+
+| # | Слой | Место | Находка | Вердикт | Обоснование / маршрут |
+|---|------|-------|---------|---------|----------------------|
+| 1 | verification-gap | ci.yml gates+spa | Гейты AD-1/28/30 в CI исполняются только в PASS-направлении; FAIL-направление — разовый ручной прогон; регресс детекции пройдёт зелёным | medium | Подтверждено: CI-джобы зовут скрипты только на чистом дереве; тестов .mjs нет. → patch: самотесты гейтов с фикстурами в CI |
+| 2 | verification-gap | ci.yml:146-160 | Шаг «миграции no-op» после рестарта шлюза ассертит только /health, который не читает migrations_applied; идемпотентность ничем не pinned | medium | Подтверждено: health() не читает флаг миграций; /ready ассертится только до рестарта. → patch: после рестарта ассерт /ready→200 |
+| 3 | verification-gap | b24.ts, spa job | readPlacementContext (контракт iframe-placement) без автотестов; «честный статус» может сломаться без сигнала | medium | Подтверждено: ни vitest/node:test, ни тест-степа в spa job. → patch: unit-тест + npm test в CI |
+| 4 | verification-gap | ci.yml:140-145 | Форма схемы (колонки/FK) не ассертится, только count 4 таблиц | low | Потребителей формы ещё нет; каждую таблицу пиннует её сторис (1.2+). → отклонено |
+| 5 | verification-gap | rabbitmq.conf, CI | quorum-дефолт не наблюдается CI (healthcheck не различает queue type) | low | Потребителей queue type нет до Story 1.4; ассерт придёт со сторис-владельцем. → отклонено |
+| 6 | blind | vite.config.ts | Нет server.proxy — dev-запрос /health падает в Vite (SPA-fallback 200 → ложный gateway-up), комментарий в App.tsx ссылается на несуществующий прокси | medium | Подтверждено: proxy отсутствует; App комментирует «Vite-прокси». → patch: proxy /health,/ready → :8080 |
+| 7 | blind | README.md | README приписывает `npm run build` запуск size-гейта, которого в скрипте нет | low | Подтверждено: build = tsc+vite, гейт отдельно. → patch: формулировка README (гейт — CI/отдельной командой) |
+| 8 | blind | ci.yml | FAIL-пути гейтов не исполняются в CI (дубль №1) | medium | См. №1. → patch (та же группа) |
+| 9 | blind | bundle-size.mjs | Fallback без module-ссылок суммирует ВСЕ assets (включая lazy) и лишь предупреждает — противоречит собственному контракту заголовка | low | Подтверждено: fallback суммирует assets/*.js с warn. → patch: fallback → fail; вместе с №17/18 |
+| 10 | blind | hexagonal-lint.mjs | Гейт не покрывает независимость platform (без axum/sqlx) и триггерится на упоминания маркеров в комментариях Cargo.toml | low | Платформа — shared kernel вне периметра AD-1 (intent гейта — core↔внешние слои) → эта часть отклонена; часть про комментарии реальна. → patch: чистка комментариев перед сопоставлением |
+| 11 | blind | CI/rust | Нет `cargo fmt --check`; rustfmt установлен, но не enforced | low | Мульти-агентная разработка гарантированно дрейфует по стилю. → patch: шаг fmt --check |
+| 12 | blind | CI/rust | Сборки без `--locked` — CI может молча обновлять закоммиченный Cargo.lock | low | Подтверждено: флага нет нигде. → patch: --locked в build/clippy/test |
+| 13 | blind | gateway | Мёртвый dep uuid; signal-фича включена, graceful shutdown отсутствует | low | uuid подтверждён неиспользуемым → patch: убрать dep. Graceful shutdown — не intent seed'а (CI-kill на эфемерном раннере) → отклонено |
+| 14 | blind | config.rs | from_env без тестов веток (missing/empty DATABASE_URL, невалидный порт/env) | low | Подтверждено: единственный тест config — environment_labels_parse. → patch: тесты веток (группа с №22–24) |
+| 15 | blind | events.rs | AD-22 «past tense» не enforce'ится — валидатор проверяет только snake_case, доко-коммент обещает больше | low | Морфология past tense нестандартизируема без хрупкой эвристики; честный фикс — зафиксировать проверяемое подмножество в доке. → patch: правка доко-коммента |
+| 16 | blind | 0002_users | UNIQUE(org, external_ref) с NULL не различает дубли unlinked-юзеров; нет комментария о семантике | low | NULL-дубли безвредны до линковки; семантику линковки пиннует Story 1.3; композитный unique уже даёт tenant-lookup. → отклонено |
+| 17 | blind | compose | Healthchecks без start_period (медленная first-init PG может вписаться в лимит впритык); valkey --appendonly противоречит «эфемерности» | low | start_period реален (anti-flake) → patch: добавить start_period. appendonly — не противоречие: AD-28 требует ephemeral state В Valkey, а не non-persistence Valkey → отклонено |
+| 18 | blind | ci.yml | Нет permissions: contents: read и timeout-minutes — широкий GITHUB_TOKEN и 6-часовой дефолт при зависании | low | Стандартное упрочнение, прямой фикс. → patch |
+| 19 | blind | ci.yml integration | /ready → 503 not_ready при недоступной БД не ассертится (покрыта только /health) | low | Готовность half-covered. → patch (вместе с №2) |
+| 20 | blind | SPA | Тестов SPA нет вообще (дубль №3) | medium | См. №3. → patch (та же группа) |
+| 21 | blind | спека Code Map | Противоречие «не изменять» vs «Edit freely» в epic-1-context.md; erratum ../../ живёт в Code Map | low | Фикс = правка спеки (запрещено триажем); уже митигировано Implementation Notes + worklog. → отклонено |
+| 22 | edge | ci.yml:116-128 | При провале degraded-ассерта bash -e обрывает шаг ДО `start postgres` — misleading-логи в уже красной джобе | low | Подтверждено (bash -e). Фикс прямой (reorder/‖ true). → patch |
+| 23 | edge | main.rs run_migrations | Перманентная ошибка миграций → бесконечный ретрай | low | Громко: /ready stuck not_ready + лог каждые 5с; reachable только с битыми будущими миграциями, которые ловит CI; фикс добавляет классификацию ошибок (не прямой). → отклонено |
+| 24 | edge | config.rs:70 | NotUnicode порт молча → дефолт 8080 | low | Подтверждено (Err(_) ловит всё). → patch: явная ветка InvalidEnv |
+| 25 | edge | config.rs | PULT_HTTP_PORT=0 валиден → случайный порт, health-checks мимо | low | Подтверждено: u16 принимает 0. → patch: reject 0 |
+| 26 | edge | config.rs | DATABASE_URL с пробелами сохраняется нетримнутым → lazy-фэйл в рантайме | low | Подтверждено: trim только для empty-проверки. → patch: хранить trimmed |
+| 27 | edge | events.rs | Deserialize обходит validate_event_type (контракт только на construct-пути) | low | Достижимого продюсера кривых событий сегодня нет (все — через new()); фикс = кастомный Deserialize (не прямой). Владелец read-path — Story 1.4. → отклонено, заметка для 1.4 |
+| 28 | edge | hexagonal-lint.mjs | path-dep `conveyor/...` с переименованным ключом крейта проходит гейт | medium | Подтверждено: маркера 'conveyor/' нет. → patch (группа robustness гейта) |
+| 29 | edge | hexagonal-lint.mjs | Пустой core/ → PASS без единой проверки | low | Подтверждено: пустой цикл → PASS. → patch: guard exit(2) |
+| 30 | edge | bundle-size.mjs | TYPE=module в верхнем регистре не распознаётся (regex case-sensitive) | low | Vite генерит lowercase, но гейт должен быть честным. → patch: /i (группа №9) |
+| 31 | edge | bundle-size.mjs | module-ref на внешний URL/не-.js молча выпадает из бюджета | low | Подтверждено: filter endsWith('.js'). → patch: fail на неклассифицируемом ref |
+| 32 | edge | Skeleton.tsx | lines>5 даёт отрицательную width | low | Достижимо только будущим вызовом; фикс — clamp, прямой. → patch |
+| 33 | edge | App.tsx | /health с кодом ≠200/503 (напр. 404) помечается gateway-degraded | medium | Подтверждено: res.ok false → degraded; вместе с №6 — dev-режим показывает фикцию. → patch (та же группа: явные коды) |
+| 34 | edge | conveyor/* | Claim: таск-чекбокс обещает ports.rs и в conveyor, а их там нет | false | Опровергнуто Code Map и AC: ports.rs — только core/*/ports.rs (AR-2); conveyor — adapter-сторона, портов не объявляет. Гексагон соблюдён |
+| 35 | edge | CI up --wait | Лог упавшего подъёма контейнеров не диагностируется в джобе | low | Уже закрыто фикс-коммитом 8b673dd (диагностический шаг compose logs при failure). carried: закрыто |
+
+Итог группировки: без intent_gap и bad_spec — лупбэка нет. Выжившие маршрутизируются в **patch** (группы: №1/8 гейт-самотесты; №6/33 dev-прокси; №2/19 /ready-ассерты; №3/20 SPA-тест; №10/28/29 robustness hex-lint; №9/30/31 честность bundle-гейта; №22 старт postgres; №24/25/26/14 config; №11/12 fmt+locked; №17 start_period; №18 permissions/timeout; №7 README; №13 uuid; №15 доко events; №32 clamp). Отклонены: №4,5,13(shutdown),16,21,23,27,10(platform-часть),17(appendonly-часть),34.
 
 ## Design Notes
 
