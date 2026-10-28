@@ -2,7 +2,7 @@
 title: 'Story 1.2 — Шаг 0: фильтр периметра «ваш бизнес»'
 type: 'feature'
 created: '2026-10-28'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '2e02d8f'
