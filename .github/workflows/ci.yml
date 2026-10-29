@@ -680,12 +680,21 @@ jobs:
                OR encode(token_nonce, 'escape') LIKE '%ci-%'")
           echo "строк с plaintext-подстроками в шифротексте/nonce: $leak_rows"
           [ "$leak_rows" = "0" ] || fail "plaintext-подстроки в шифротексте/nonce: '$leak_rows' строк"
-          # DELETE существующей строки → GET снова пуст.
+          # DELETE обеих строк → GET снова пуст. Корневая причина красного
+          # integration с d4b60fd: Ozon-нога добавлена в лайфсайкл, но хвост
+          # шага остался от версии с одной WB — после DELETE wildberries
+          # в списке оставалась Ozon-строка, финальный grep на пустой список
+          # молча ронял шаг (bash -e, последняя команда AND-списка).
+          # Теперь удаляются обе — заодно e2e покрывает DELETE существующей
+          # Ozon-строки (до этого — только идемпотентное удаление отсутствующей).
           code=$(curl -s --max-time 10 -o /tmp/v4.json -w '%{http_code}' -X DELETE "$base/v1/connections/wildberries?$qs" || true)
           check_code "DELETE WB" "$code" "200"
-          check_body "DELETE → deleted" '"status":"deleted"' /tmp/v4.json
+          check_body "DELETE WB → deleted" '"status":"deleted"' /tmp/v4.json
+          code=$(curl -s --max-time 10 -o /tmp/v4b.json -w '%{http_code}' -X DELETE "$base/v1/connections/ozon?$qs" || true)
+          check_code "DELETE Ozon" "$code" "200"
+          check_body "DELETE Ozon → deleted" '"status":"deleted"' /tmp/v4b.json
           code=$(curl -s --max-time 10 -o /tmp/v5.json -w '%{http_code}' "$base/v1/connections?$qs" || true)
-          check_code "GET после DELETE" "$code" "200"
+          check_code "GET после DELETE обеих площадок" "$code" "200"
           check_body "GET → пустой список" '"connections":\[\]' /tmp/v5.json
           kill "$(cat /tmp/probe-stub.pid)" 2>/dev/null || true
           echo "verified-лайфсайкл 1.3 подтверждён (save/GET/ротация/DELETE, plaintext не в БД)"
@@ -697,7 +706,7 @@ jobs:
         run: |
           echo "=== тела ответов e2e (/tmp/*.json) ==="
           for f in /tmp/s0.json /tmp/s1.json /tmp/s2.json /tmp/s3.json /tmp/v0.json /tmp/v1.json \
-                   /tmp/v2.json /tmp/v3.json /tmp/v4.json /tmp/v5.json /tmp/v6.json /tmp/v7.json \
+                   /tmp/v2.json /tmp/v3.json /tmp/v4.json /tmp/v4b.json /tmp/v5.json /tmp/v6.json /tmp/v7.json \
                    /tmp/c0.json /tmp/c1.json /tmp/c2.json /tmp/c3.json /tmp/c4.json /tmp/c5.json \
                    /tmp/c6.json /tmp/c7.json /tmp/h3.json /tmp/health.json /tmp/ready.json; do
             [ -f "$f" ] || continue
