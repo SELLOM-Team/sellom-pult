@@ -60,6 +60,22 @@ impl BoardColumn {
             BoardColumn::Risk => "risk",
         }
     }
+
+    /// Обратное [`BoardColumn::as_str`] — парсинг DTO конвейера (консьюмер
+    /// событий; строка уже в канон-словаре, сырое с площадки уже срезано
+    /// нормализацией при публикации).
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "new" => Some(BoardColumn::New),
+            "assembling" => Some(BoardColumn::Assembling),
+            "shipping" => Some(BoardColumn::Shipping),
+            "in_transit" => Some(BoardColumn::InTransit),
+            "delivered" => Some(BoardColumn::Delivered),
+            "returned" => Some(BoardColumn::Returned),
+            "risk" => Some(BoardColumn::Risk),
+            _ => None,
+        }
+    }
 }
 
 /// Позиция заказа (каноническая, AD-22). Сериализация — DTO конвейера

@@ -25,9 +25,10 @@ publish = false
 
 [workspace.dependencies]
 # --- стек зафиксирован (AD-20): Rust 1.99.1 (rust-toolchain.toml) ---
-# feature signal не включён: graceful shutdown отклонён триажем Story 1.1 —
-# добавляется вместе с обработкой SIGTERM, когда она появится.
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time"] }
+# feature signal: graceful shutdown воркеров Story 1.4 (SIGTERM/SIGINT —
+# моменты, когда обработка сигналов «появилась» по триаж-примечанию 1.1;
+# шлюз остаётся без signal — HTTP-сервису допускается мгновенный stop).
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
 axum = "0.8.9"
 # json (jsonb-колонка marketplaces) и uuid (ключи users/organizations) —
 # нужны шлюзу с Story 1.2 (шаг 0: рантайм-запросы, паттерн пробы /health).
@@ -52,6 +53,14 @@ reqwest = { version = "0.12", default-features = false }
 # Идемпотентный ключ событий = sha256(marketplace|тип|внешний id|revision);
 # crates.io 29.10.2026: max_stable 0.11.1.
 sha2 = "0.11.1"
+
+# RabbitMQ-клиент воркеров (quorum-очередь, publisher confirms).
+# crates.io 29.10.2026: max_stable 4.12.3. default-фичи тянут rustls — не
+# нужен: AMQP внутри периметра (compose-сеть), amqps:// — отдельная задача
+# эксплуатации; берём только tokio-рантайм (plain AMQP).
+lapin = { version = "4.12.3", default-features = false, features = ["tokio"] }
+# StreamExt над lapin::Consumer (поток доставок) — только воркеры.
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
 [profile.release]
 lto = "thin"

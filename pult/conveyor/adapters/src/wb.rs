@@ -178,6 +178,24 @@ impl WbHttpOrdersSource {
 impl WbOrdersSource for WbHttpOrdersSource {
     type Error = WbSourceError;
 
+    fn classify_failure(error: &WbSourceError) -> pult_core_sync::ports::SourceFailure {
+        match error {
+            // 401/403: токен отозван/недействителен — ретрай бессмыслен.
+            WbSourceError::AccessDenied(_) => pult_core_sync::ports::SourceFailure::AccessRevoked,
+            // Лимит не отпустил за отведённые попытки, сеть, неожиданный 5xx —
+            // временный класс: продолжение с чекпоинта (AD-3).
+            WbSourceError::RateLimited(_) | WbSourceError::Transport(_) => {
+                pult_core_sync::ports::SourceFailure::Transient
+            }
+            WbSourceError::UnexpectedStatus(_) => pult_core_sync::ports::SourceFailure::Transient,
+            // Схема ответа сменилась (событие для ревью) или потолок тела —
+            // без человека не чинится.
+            WbSourceError::BadPayload(_) | WbSourceError::TooLarge(_) => {
+                pult_core_sync::ports::SourceFailure::Fatal
+            }
+        }
+    }
+
     async fn fetch_window(
         &self,
         window: DateWindow,

@@ -4,5 +4,30 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "pult-workers"
+path = "src/main.rs"
+
 [dependencies]
 pult-platform = { path = "../../platform" }
+# Порты и канонические типы синка — воркер реализует Projection/Checkpoint
+# сторы и оркестрирует циклы поверх портов (AD-1: композиция вне домена).
+pult-core-sync = { path = "../../core/sync" }
+# Marketplaces/схемы (DTO) + TokenCipher-типы (decrypt в main).
+pult-core-identity = { path = "../../core/identity" }
+# Композиция стека адаптера: VaultTokenCipher + WbHttpOrdersSource —
+# оркестратор собирает источник из расшифрованного токена (conveyor→conveyor,
+# гейт AD-1 ограничивает только ядро).
+pult-conveyor-adapters = { path = "../adapters" }
+# RabbitMQ: quorum-очередь, publisher confirms, per-consumer prefetch.
+lapin = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
