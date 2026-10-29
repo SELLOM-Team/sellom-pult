@@ -23,13 +23,16 @@ env:
 jobs:
   rust:
     name: rust (fmt + build + clippy + test, --locked)
-    runs-on: ubuntu-latest
+    # Пин образа (не ubuntu-latest): latest мигрирует на Ubuntu 26 с
+    # 2026-10-19 — детерминизм toolchain'а дороже свежести. Апгрейд на
+    # ubuntu-26.04 — отдельная осознанная задача, не попутная правка.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
         working-directory: pult
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy, rustfmt
@@ -47,14 +50,14 @@ jobs:
 
   spa:
     name: spa (vitest + build + bundle gate AD-30)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
         working-directory: pult/shells/bitrix24
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -100,10 +103,10 @@ jobs:
 
   gates:
     name: gates (hexagonal AD-1 + cache-adapter grep AD-28, PASS и FAIL)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: hexagonal-lint — граница ядра чиста (PASS)
         run: node pult/platform/scripts/hexagonal-lint.mjs
       - name: valkey-grep — запрещённых образов кэша нет (PASS)
@@ -251,7 +254,7 @@ jobs:
 
   integration:
     name: integration (compose + migrations + /health + tables)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: [rust, gates]
     env:
@@ -267,7 +270,7 @@ jobs:
       # probe_unavailable (порт discard — отказ соединения).
       PULT_PROBE_HOST_OVERRIDE: http://127.0.0.1:9
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
