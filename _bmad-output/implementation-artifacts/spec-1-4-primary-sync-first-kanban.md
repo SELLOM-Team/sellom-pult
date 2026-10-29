@@ -88,6 +88,14 @@ context:
 
 ## Implementation Notes
 
+### Живой WB-контур: факты первой живой пробы (29.10.2026, probing токеном владельца)
+
+- Песочница: паттерн `*-api-sandbox.wildberries.ru` подтверждён (origin `ag-statistics-sandbox`, `ag-content-sandbox`); `statistics-api-sandbox.wildberries.ru` ОТВЕЧАЕТ — бэкенд песочницы статистики жив, хотя официальный список песочниц перечисляет только content/discounts-prices/marketplace/feedbacks. Каждый хост имеет `GET /ping` (connection check: проверяет и токен, и категорию; лимит 3 req/30с — пауза 10с между пробами).
+- Тестовый токен владельца (ent=1, t=true; id UUIDv7 → создан 2026-08-12; exp 2027-02-11; oid 250175131) отклоняется на ВСЕХ входах (prod-statistics, statistics-sandbox, content-sandbox) с 401 `token signature is invalid: crypto/ecdsa: verification error`. Дифференциальная проба: мусор → `token is malformed`, JWT с чужим kid → `unknown kid` — шлюз РАЗЛИЧАЕТ классы ошибок и kid `20260302v1` ему ИЗВЕСТЕН. Вывод: строка токена повреждена до передачи (структура идеальна: подпись ровно 64 байта ES256, payload полностью связный — вероятен одиночный подменённый символ в signature/payload) либо у WB рассинхрон ключей kid. Токен в текущем виде непригоден — владельцу перевыпустить.
+- КЛЮЧЕВОЕ для повторной выдачи: по документации тестовый токен работает ТОЛЬКО с песочницей, а песочница для statistics в официальном списке ОТСУТСТВУЕТ → даже валидный тестовый токен НЕ читает `/api/v1/supplier/orders`. Для внешней верификации словаря статусов и wire-формата нужен **базовый токен** (категория «Статистика», только чтение) — по документации это ровно его назначение: тестирование интеграции на реальных данных до запуска.
+- 401-конверт WB: `{"status":401,"statusText":…,"title":…,"detail":"invalid API access token: …","requestId":…,"origin":"ag-…"}` — адаптеру достаточно кода (`AccessDenied(401)`); соответствие обработки подтверждено живым ответом. Rate-limit-заголовки `X-Ratelimit-*` на 401 не приходят (до авторизации лимит не считается) — экспоненциальный фоллбэк адаптера на 429 без Retry-After остаётся корректным.
+- Конфиг (platform/config.rs): `PULT_WB_STAT_BASE` default `https://statistics-api.wildberries.ru` (prod); тестовый контур — `https://statistics-api-sandbox.wildberries.ru` (существование проверено живым probing'ом).
+
 - lapin (RabbitMQ) и uuid v7 — версии веб-верифицировать при добавлении в workspace.dependencies (Директива 1; пины как AD-20-стайл); deps: tokio/axum/sqlx уже закреплены.
 - quorum-очередь объявляется декларативно (x-quorum-queue: true); приоритеты quorum-очередей поддерживаются нативно (в отличие от classic) — проверить версию RabbitMQ 4.4 в compose при имплементации.
 - Не вводить ClickHouse/CH-витрины — только PG-проекция канбана (FR-16 читает PG).
