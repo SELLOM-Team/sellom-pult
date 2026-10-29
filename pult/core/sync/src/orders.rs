@@ -208,8 +208,8 @@ pub const WB_STATUS_DICTIONARY: &[(i64, BoardColumn)] = &[];
 /// строк сохраняется в позициях; сумма заказа — сумма `totalPrice` позиций;
 /// ревизия заказа — максимум `lastChangeDate` строк (любая позиция меняет
 /// ревизию всего заказа). Схема — эвристика incomeID ([ASSUMPTION] спеки:
-/// >0 → FBO, 0 → FBS; realFBS в статистике не отличим — уточняется живым
-/// токеном владельца).
+/// положительный incomeID → FBO, ноль → FBS; realFBS в статистике не
+/// отличим — уточняется живым токеном владельца).
 pub fn aggregate_wb_rows(
     organization_id: Uuid,
     rows: Vec<crate::ports::WbOrderRow>,

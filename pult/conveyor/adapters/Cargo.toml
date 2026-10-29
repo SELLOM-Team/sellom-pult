@@ -6,3 +6,19 @@ publish.workspace = true
 
 [dependencies]
 pult-platform = { path = "../../platform" }
+# Порты и канонические типы синка (fetch_window, WbOrderRow) — адаптер
+# реализует порт домена, не наоборот (AD-1).
+pult-core-sync = { path = "../../core/sync" }
+# TokenCipher-порт (write-only vault 1.3): первый потребитель decrypt.
+pult-core-identity = { path = "../../core/identity" }
+# AES-256-GCM: расшифровка токена (совместима с EnvAesGcmCipher шлюза:
+# nonce 12 байт, шифротекст||GCM-тег).
+aes-gcm = { workspace = true }
+# HTTP к площадке: rustls (без openssl), json.
+reqwest = { workspace = true, features = ["rustls-tls", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

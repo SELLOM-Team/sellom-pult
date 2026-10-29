@@ -1131,7 +1131,17 @@ dependencies = [
 name = "pult-conveyor-adapters"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "chrono",
+ "pult-core-identity",
+ "pult-core-sync",
  "pult-platform",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

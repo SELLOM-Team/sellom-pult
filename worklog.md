@@ -402,3 +402,22 @@ Stage Summary:
 - RECOVERY.md теперь описывает проверенный в бою путь подъёма инструментов БЕЗ перезапуска сессии (самоподъём на новом ходе + субагент-фоллбэк) — следующий сбой устраняется по инструкции.
 - Rust-окружение восстановлено (4-й сбой), SPA-окружение живо. К работе по Story 1.4 среда готова.
 - Следующий шаг: bmad-build Story 1.4 «Первичный синк истории и первый канбан» (FR-3, минимальный вертикальный срез конвейера adapter → RabbitMQ → worker → PG).
+
+---
+Task ID: 20
+Agent: main (Z.ai)
+Task: BMAD bmad-build Story 1.4 «Первичный синк истории и первый канбан» — имплементация (веха 1: домен; веха 2: адаптеры).
+
+Work Log:
+- Спека spec-1-4 (1850ad4): статус draft → задачи закрываются по ходу; sprint 1-4 in-progress.
+- Веха 1 (778e4b8): миграция 0007 (sync_runs чекпоинты AD-3 + orders PARTITION BY HASH(organization_id) AD-4 + order_items составной FK + UNIQUE idem/natural AD-15 + канбан-индекс); core/sync — домен (BoardColumn 7-словарь FR-16, CanonicalOrder, idem sha256, агрегация строк WB, прогресс-математика честная); ports — 4 порта + конверт AD-22 (UUIDv7, schema_version); identity::vault as_str (аддитивно). Словарь статусов WB СОЗНАТЕЛЬНО пустой [ASSUMPTION]: коды статистики не верифицируемы публично (поиск + SDK-зеркала не дают таблицу) — заполнение = внешняя верификация живым токеном владельца; структурные ветки (cancel→risk, finished→delivered, unknown→risk с сохранением сырого кода) работают без словаря. Схема заказа — эвристика incomeID [ASSUMPTION].
+- СБОЙ CI run #26 (rust/clippy): в 778e4b8 ушёл clippy-warning «doc quote line without > marker» (>0 → FBO в комментарии агрегатора). ПРОВЕРКА БЫЛА НЕГРОМКОЙ: clippy проверялся по tail -8, warning не попал в хвост. Фикс в рабочем дереве (переформулировка без «>»), УРОК: clippy-верификация обязана быть grep-подобной (rg -c '^warning|^error'; ноль — иначе стоп), а не «в хвосте ничего не видно».
+- Веха 2 (этот коммит): conveyor/adapters — cipher.rs (VaultTokenCipher: AES-256-GCM decrypt-ветка порта TokenCipher, совместимость со схемой шлюза доказана round-trip против ручного шифрования тем же ключом; encrypt — явный unsupported: окно записи vault — только шлюз) + wb.rs (WbHttpOrdersSource: порт WbOrdersSource; URL ?dateFrom&flag=0, фильтр правой границы окна по lastChangeDate (граничные дубли гасит AD-15), 429/Retry-After + экспоненциальная пауза, потолок тела, redact-гигиена сообщений, токен не логируется; parse_orders_body wire→домен, юнит-тесты: парсинг/фильтр окна/URL-форма/redact/cipher round-trip/wrong-key-fails-closed/encrypt-unsupported).
+- Версии верифицированы: sha2 0.11.1, lapin 4.12.3 (crates.io API 29.10); reqwest reuses 1.3-паттерн (rustls+json); serde в core/sync СНЯТ по прецеденту identity (сериализация — компоновочные корни конвейера).
+- Верификация локальная: cargo fmt --check OK; clippy --workspace --all-targets --locked — rg-громко: 0 warnings; 151 тест зелёные (143 + 8 adapters); гейты hex/valkey/vault PASS.
+
+Stage Summary:
+- Story 1.4: закрыты задачи домена/портов/миграции/адаптеров (4 из 10 в спеке). Остались: workers (оркестратор+consumer+lapin), gateway sync/board эндпоинты, platform config, compose/CI e2e, SPA (доска+прогресс), верификация.
+- Инженерное решение по статусному словарю WB: без выдумывания кодов (Директива 1) — версионируемая ПУСТАЯ таблица + структурные ветки + raw-код на карточке; заполнение = живой токен владельца (внешняя верификация из спеки).
+- Урок CI: негромкая проверка clippy (tail) пропустила warning → красный run #26. Дисциплина: grep '^warning', ноль или стоп.
+- Следующий шаг: conveyor/workers (бинарный main: оркестратор циклов + consumer с lapin; интеграционные фейки портов в тестах), затем gateway-эндпоинты и CI e2e; после каждого пуша ждать зелёный прогон (cancel-in-progress гасит).
