@@ -67,9 +67,9 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `0007_sync_orders_board.sql` — sync_runs + orders (HASH-партиции AD-4) + order_items + idem UNIQUE (AD-15) + триггеры updated_at + индексы под канбан-запрос (колонка+org)
-- [ ] `core/sync` — домен: Order/OrderItem/BoardColumn, статусный словарь WB→канон (первые ~15 кодов WB; `[ASSUMPTION]` до живого токена владельца — фиксируется в спеке), idem-ключ, прогресс-математика (окна → percent/ETA); юнит-тесты: маппер, дедуп-логика, прогресс-расчёт, порядок ревизий
-- [ ] `ports.rs` — Publisher/ProjectionStore/CheckpointStore/WbOrdersSource; события — конверт AD-22 (schema_version, UUIDv7)
+- [x] `0007_sync_orders_board.sql` — sync_runs + orders (HASH-партиции AD-4) + order_items + idem UNIQUE (AD-15) + триггеры updated_at + индексы под канбан-запрос (колонка+org)
+- [x] `core/sync` — домен: Order/OrderItem/BoardColumn, статусный словарь WB→канон (первые ~15 кодов WB; `[ASSUMPTION]` до живого токена владельца — фиксируется в спеке), idem-ключ, прогресс-математика (окна → percent/ETA); юнит-тесты: маппер, дедуп-логика, прогресс-расчёт, порядок ревизий
+- [x] `ports.rs` — Publisher/ProjectionStore/CheckpointStore/WbOrdersSource; события — конверт AD-22 (schema_version, UUIDv7)
 - [ ] `conveyor/adapters` — WbOrdersSource: расшифровка (TokenCipher), окна дат, backoff 429/Retry-After, потолок тела, без логирования секретов; юнит-тесты на мок-HTTP (2xx/429/401/5xx/таймаут)
 - [ ] `conveyor/workers` — бинарный main: оркестратор (подбор org, прогон окон, чекпоинты после каждого окна/страницы) + consumer (ack после коммита, идемпотентность, max-revision); integration-тест с in-memory фейками портов (lapin не в юнитах — в CI)
 - [ ] `gateway/sync.rs`/`board.rs` — 3 эндпоинта + бюджеты + конверты + placement; Rust-тесты хендлеров (мок-сторы)

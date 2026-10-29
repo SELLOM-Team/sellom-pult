@@ -27,6 +27,19 @@ pub enum Marketplace {
     Ozon,
 }
 
+impl Marketplace {
+    /// Код площадки — БД CHECK (`wildberries`/`ozon`), материал idem-ключа
+    /// AD-15 и JSON-контрактов. Единственный источник словаря (AD-22).
+    /// [Story 1.4] Добавлено аддитивно: домену синка нужен детерминированный
+    /// строковый код для sha256-отпечатка событий.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Marketplace::Wildberries => "wildberries",
+            Marketplace::Ozon => "ozon",
+        }
+    }
+}
+
 /// Схема продажи (чекбоксы мастера, шаг 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scheme {
@@ -38,6 +51,19 @@ pub enum Scheme {
     RealFbs,
     /// rFBS — только Ozon.
     Rfbs,
+}
+
+impl Scheme {
+    /// Код схемы — БД CHECK миграции 0007 и материал idem-ключа AD-15.
+    /// [Story 1.4] См. `Marketplace::as_str`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Scheme::Fbo => "fbo",
+            Scheme::Fbs => "fbs",
+            Scheme::RealFbs => "realfbs",
+            Scheme::Rfbs => "rfbs",
+        }
+    }
 }
 
 /// Статус подключения (значения контракта маппит шлюз; в БД пишется только

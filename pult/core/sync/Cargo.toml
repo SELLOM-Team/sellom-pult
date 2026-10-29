@@ -6,3 +6,13 @@ publish.workspace = true
 
 [dependencies]
 pult-platform = { path = "../../platform" }
+# Единый словарь площадок/схем (Marketplace/Scheme) — core→core допустим
+# (AD-1 запрещает ядру conveyor/shells/gateway, не соседям по ядру).
+pult-core-identity = { path = "../identity" }
+# Типы значений: ключи организаций/заказов, метки времени.
+# serde в домене НЕ используется — прецедент identity (AD-1: сериализация —
+# DTO композиционных корней конвейера).
+uuid = { workspace = true }
+chrono = { workspace = true }
+# Идемпотентный ключ AD-15: sha256-отпечаток события.
+sha2 = { workspace = true }

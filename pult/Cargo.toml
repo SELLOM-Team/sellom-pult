@@ -48,5 +48,10 @@ aes-gcm = "0.10.3"
 # Пробы прав площадок: rustls (без openssl), json; дефолт-фичи отключены.
 reqwest = { version = "0.12", default-features = false }
 
+# --- Story 1.4 (синк, AD-15) ---
+# Идемпотентный ключ событий = sha256(marketplace|тип|внешний id|revision);
+# crates.io 29.10.2026: max_stable 0.11.1.
+sha2 = "0.11.1"
+
 [profile.release]
 lto = "thin"
