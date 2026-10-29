@@ -329,17 +329,24 @@ jobs:
           # БД возвращается в стек ДО ассертов: провал ассерта (bash -e) не должен
           # обрывать шаг раньше восстановления окружения.
           docker compose -f pult/deploy/docker-compose.yml start postgres
-          [ "$code" = "503" ] && grep -q '"status":"degraded"' /tmp/health.json
-          [ "$ready_code" = "503" ]
-          grep -q '"status":"not_ready"' /tmp/ready.json
-          grep -q '"migrations_applied":true' /tmp/ready.json
-          [ "$v1_code" = "422" ] && grep -q '"code":"invalid_trade_model"' /tmp/v1-deg.json
-          [ "$state_code" = "503" ] && grep -q '"code":"database_unavailable"' /tmp/v1-state.json
+          [ "$code" = "503" ] && grep -q '"status":"degraded"' /tmp/health.json \
+            || { echo "::error::FAIL: /health при недоступной БД — 503 degraded"; exit 1; }
+          [ "$ready_code" = "503" ] \
+            || { echo "::error::FAIL: /ready при недоступной БД — 503"; exit 1; }
+          grep -q '"status":"not_ready"' /tmp/ready.json \
+            || { echo "::error::FAIL: /ready → not_ready"; exit 1; }
+          grep -q '"migrations_applied":true' /tmp/ready.json \
+            || { echo "::error::FAIL: /ready → migrations_applied=true (флаг миграций жив)"; exit 1; }
+          [ "$v1_code" = "422" ] && grep -q '"code":"invalid_trade_model"' /tmp/v1-deg.json \
+            || { echo "::error::FAIL: /v1-валидация в деградации — 422 invalid_trade_model"; exit 1; }
+          [ "$state_code" = "503" ] && grep -q '"code":"database_unavailable"' /tmp/v1-state.json \
+            || { echo "::error::FAIL: /v1/onboarding/state в деградации — 503 database_unavailable"; exit 1; }
           # Подключения 1.3 в деградации: GET — честный 503-конверт (ревью 1.3:
           # новые эндпоинты под тем же договором деградации, что и шаг 0).
           conn_code=$(curl -s --max-time 10 -o /tmp/v1-conn.json -w '%{http_code}' \
             "http://localhost:8080/v1/connections" || true)
-          [ "$conn_code" = "503" ] && grep -q '"code":"database_unavailable"' /tmp/v1-conn.json
+          [ "$conn_code" = "503" ] && grep -q '"code":"database_unavailable"' /tmp/v1-conn.json \
+            || { echo "::error::FAIL: /v1/connections в деградации — 503 database_unavailable"; exit 1; }
       - name: БД восстановилась → /health снова 200 ok
         run: |
           for i in $(seq 1 30); do
@@ -361,13 +368,13 @@ jobs:
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -tAc \
             "SELECT count(*) FROM organizations WHERE name = 'ci-sentinel-survives-reup'" \
-            | grep -qx '1'
+            | grep -qx '1' || { echo "::error::FAIL: sentinel-строка не пережила повторный up"; exit 1; }
       - name: psql — 6 таблиц (Story 1.1 + шаг 0 + подключения 1.3) существуют
         run: |
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -tAc \
             "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('organizations','users','role_assignments','portal_settings','perimeter_verdicts','marketplace_connections')" \
-            | grep -qx '6'
+            | grep -qx '6' || { echo "::error::FAIL: в public не 6 таблиц (Story 1.1 + 1.2 + 1.3)"; exit 1; }
       - name: повторный запуск шлюза — миграции no-op, /ready → ready (идемпотентность)
         working-directory: pult
         run: |
@@ -394,39 +401,47 @@ jobs:
           qs='DOMAIN=ci-shop.example&USER_ID=1'
           # Первый вход: вопросник требуется.
           code=$(curl -s --max-time 10 -o /tmp/s0.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
-          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s0.json
+          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s0.json \
+            || { echo "::error::FAIL: первый вход — вопросник (step0_required)"; exit 1; }
           # Ответ селлера → funnel.
           code=$(curl -s --max-time 10 -o /tmp/v0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"marketplace_seller","marketplaces":["wildberries","ozon"]}' \
             "$base/v1/perimeter/verdict?$qs")
-          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v0.json && grep -q '"state":"funnel"' /tmp/v0.json
+          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v0.json && grep -q '"state":"funnel"' /tmp/v0.json \
+            || { echo "::error::FAIL: вердикт селлера — funnel"; exit 1; }
           # Повторное открытие: вопросник не показывается (per-user запоминание).
           code=$(curl -s --max-time 10 -o /tmp/s1.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
-          [ "$code" = "200" ] && grep -q '"state":"funnel"' /tmp/s1.json
+          [ "$code" = "200" ] && grep -q '"state":"funnel"' /tmp/s1.json \
+            || { echo "::error::FAIL: повторное открытие — вопросник не должен возвращаться"; exit 1; }
           # Иммутабельность: повторный POST с ДРУГИМИ ответами возвращает сохранённый вердикт.
           code=$(curl -s --max-time 10 -o /tmp/v1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"services_other"}' \
             "$base/v1/perimeter/verdict?$qs")
-          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v1.json && grep -q '"state":"funnel"' /tmp/v1.json
+          [ "$code" = "200" ] && grep -q '"verdict":"seller"' /tmp/v1.json && grep -q '"state":"funnel"' /tmp/v1.json \
+            || { echo "::error::FAIL: иммутабельность вердикта селлера"; exit 1; }
           echo "селлер-поток шага 0 отработал (вопросник → funnel, вердикт иммутабелен)"
       - name: "шаг 0 (e2e) — не-селлер: отказ и терминальный экран"
         run: |
           base='http://localhost:8080'
           qs='DOMAIN=ci-other.example&USER_ID=7'
           code=$(curl -s --max-time 10 -o /tmp/s2.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
-          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s2.json
+          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/s2.json \
+            || { echo "::error::FAIL: первый вход не-селлера — вопросник"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/v2.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"services_other"}' \
             "$base/v1/perimeter/verdict?$qs")
-          [ "$code" = "200" ] && grep -q '"verdict":"non_seller"' /tmp/v2.json && grep -q '"state":"exit_screen"' /tmp/v2.json
+          [ "$code" = "200" ] && grep -q '"verdict":"non_seller"' /tmp/v2.json && grep -q '"state":"exit_screen"' /tmp/v2.json \
+            || { echo "::error::FAIL: не-селлер — отказ + exit_screen"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/s3.json -w '%{http_code}' "$base/v1/onboarding/state?$qs")
-          [ "$code" = "200" ] && grep -q '"state":"exit_screen"' /tmp/s3.json
+          [ "$code" = "200" ] && grep -q '"state":"exit_screen"' /tmp/s3.json \
+            || { echo "::error::FAIL: повторное открытие не-селлера — exit_screen"; exit 1; }
           # Иммутабельность для не-селлера: повторный POST возвращает сохранённый
           # вердикт (формальное ревью 1.2: обе ветки вердикта под ассертом).
           code=$(curl -s --max-time 10 -o /tmp/v3.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"own_channels_no_marketplaces"}' \
             "$base/v1/perimeter/verdict?$qs")
-          [ "$code" = "200" ] && grep -q '"verdict":"non_seller"' /tmp/v3.json && grep -q '"state":"exit_screen"' /tmp/v3.json
+          [ "$code" = "200" ] && grep -q '"verdict":"non_seller"' /tmp/v3.json && grep -q '"state":"exit_screen"' /tmp/v3.json \
+            || { echo "::error::FAIL: иммутабельность вердикта не-селлера"; exit 1; }
           echo "не-селлер-поток отработал (честный отказ, воронка закрыта)"
       - name: "шаг 0 (e2e) — валидация и метрика (знаменатель активации UJ-1)"
         run: |
@@ -434,19 +449,24 @@ jobs:
           # Невалидная модель — 422 человекочитаемым конвертом, без касания БД.
           code=$(curl -s --max-time 10 -o /tmp/e0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"wholesale"}' "$base/v1/perimeter/verdict")
-          [ "$code" = "422" ] && grep -q '"code":"invalid_trade_model"' /tmp/e0.json
+          [ "$code" = "422" ] && grep -q '"code":"invalid_trade_model"' /tmp/e0.json \
+            || { echo "::error::FAIL: невалидная модель — 422 invalid_trade_model"; exit 1; }
           # Селлерская модель без площадок — 422.
           code=$(curl -s --max-time 10 -o /tmp/e1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"trade_model":"marketplace_planned","marketplaces":[]}' "$base/v1/perimeter/verdict")
-          [ "$code" = "422" ] && grep -q '"code":"marketplaces_required"' /tmp/e1.json
+          [ "$code" = "422" ] && grep -q '"code":"marketplaces_required"' /tmp/e1.json \
+            || { echo "::error::FAIL: селлер без площадок — 422 marketplaces_required"; exit 1; }
           # Контракт конверта на ЛЮБОМ маршруте (формальное ревью 1.2):
           # 404/405 тоже под конвертом, резервный DOMAIN — 422 до касания БД.
           code=$(curl -s --max-time 10 -o /tmp/nf.json -w '%{http_code}' "$base/v1/nope")
-          [ "$code" = "404" ] && grep -q '"code":"not_found"' /tmp/nf.json
+          [ "$code" = "404" ] && grep -q '"code":"not_found"' /tmp/nf.json \
+            || { echo "::error::FAIL: 404 под конвертом not_found"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/mna.json -w '%{http_code}' "$base/v1/perimeter/verdict")
-          [ "$code" = "405" ] && grep -q '"code":"method_not_allowed"' /tmp/mna.json
+          [ "$code" = "405" ] && grep -q '"code":"method_not_allowed"' /tmp/mna.json \
+            || { echo "::error::FAIL: 405 под конвертом method_not_allowed"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/rv.json -w '%{http_code}' "$base/v1/onboarding/state?DOMAIN=dev-portal&USER_ID=1")
-          [ "$code" = "422" ] && grep -q '"code":"reserved_member_id"' /tmp/rv.json
+          [ "$code" = "422" ] && grep -q '"code":"reserved_member_id"' /tmp/rv.json \
+            || { echo "::error::FAIL: резервный DOMAIN — 422 reserved_member_id"; exit 1; }
           # Метрика: 2 установки (ci-shop + ci-other), обе прошли шаг 0, 1 селлер.
           # dev-фоллбэк реально создаётся запросом без placement-параметров и
           # НЕ меняет счётчики (исключение фиксируется этим же ассертом);
@@ -456,17 +476,19 @@ jobs:
           # (200 + вопросник) и виден в реестре (формальное ревью 1.2:
           # проба с выброшенным ответом проверяла только половину контракта).
           code=$(curl -s --max-time 10 -o /tmp/dev0.json -w '%{http_code}' "$base/v1/onboarding/state")
-          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/dev0.json
+          [ "$code" = "200" ] && grep -q '"state":"step0_required"' /tmp/dev0.json \
+            || { echo "::error::FAIL: dev-фоллбэк — 200 + вопросник"; exit 1; }
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -tAc \
             "SELECT count(*) FROM organizations WHERE b24_member_id = 'dev-portal'" \
-            | grep -qx '1'
+            | grep -qx '1' || { echo "::error::FAIL: dev-фоллбэк не создан в реестре"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/m0.json -w '%{http_code}' "$base/v1/metrics/perimeter")
           [ "$code" = "200" ] \
             && grep -q '"installs":2,' /tmp/m0.json \
             && grep -q '"step0_completed":2,' /tmp/m0.json \
             && grep -q '"sellers":1,' /tmp/m0.json \
-            && grep -q '"step0_share":1.0}' /tmp/m0.json
+            && grep -q '"step0_share":1.0}' /tmp/m0.json \
+            || { echo "::error::FAIL: метрика шага 0 (installs=2, completed=2, sellers=1, share=1.0)"; exit 1; }
           echo "валидация и метрика шага 0 отработали (dev-фоллбэк исключён)"
       - name: "шаг 1.3 (e2e) — подключения: 422, probe_unavailable не сохраняет, DELETE"
         run: |
@@ -474,33 +496,41 @@ jobs:
           qs='DOMAIN=ci-connect.example&USER_ID=9'
           # GET без подключений — пустой список (write-on-GET нет).
           code=$(curl -s --max-time 10 -o /tmp/c0.json -w '%{http_code}' "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"connections":\[\]' /tmp/c0.json
+          [ "$code" = "200" ] && grep -q '"connections":\[\]' /tmp/c0.json \
+            || { echo "::error::FAIL: GET без подключений — пустой список"; exit 1; }
           # Валидация до пробы и БД: неизвестная площадка и пустой токен — 422.
           code=$(curl -s --max-time 10 -o /tmp/c1.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"marketplace":"aliexpress","schemes":["fbo"],"token":"x"}' "$base/v1/connections?$qs")
-          [ "$code" = "422" ] && grep -q '"code":"unknown_marketplace"' /tmp/c1.json
+          [ "$code" = "422" ] && grep -q '"code":"unknown_marketplace"' /tmp/c1.json \
+            || { echo "::error::FAIL: aliexpress — 422 unknown_marketplace"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/c2.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"marketplace":"wildberries","schemes":["fbo"],"token":""}' "$base/v1/connections?$qs")
-          [ "$code" = "422" ] && grep -q '"code":"invalid_token"' /tmp/c2.json
+          [ "$code" = "422" ] && grep -q '"code":"invalid_token"' /tmp/c2.json \
+            || { echo "::error::FAIL: пустой токен — 422 invalid_token"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/c3.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"marketplace":"ozon","schemes":["realfbs"],"token":"x","client_id":"1"}' "$base/v1/connections?$qs")
-          [ "$code" = "422" ] && grep -q '"code":"invalid_schemes"' /tmp/c3.json
+          [ "$code" = "422" ] && grep -q '"code":"invalid_schemes"' /tmp/c3.json \
+            || { echo "::error::FAIL: realfbs для Ozon — 422 invalid_schemes"; exit 1; }
           # Ozon без Client-Id — 422 (ревью 1.3: 4-й код валидации без e2e).
           code=$(curl -s --max-time 10 -o /tmp/c7.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"marketplace":"ozon","schemes":["fbo"],"token":"x"}' "$base/v1/connections?$qs")
-          [ "$code" = "422" ] && grep -q '"code":"invalid_client_id"' /tmp/c7.json
+          [ "$code" = "422" ] && grep -q '"code":"invalid_client_id"' /tmp/c7.json \
+            || { echo "::error::FAIL: Ozon без Client-Id — 422 invalid_client_id"; exit 1; }
           # Валидное тело: пробы идут на PULT_PROBE_HOST_OVERRIDE (127.0.0.1:9
           # — детерминированный отказ соединения), поэтому честный
           # probe_unavailable и инвариант «неуспешная проба не сохраняет»:
           # GET остаётся пустым. От сети раннера ассерт не зависит.
           code=$(curl -s --max-time 30 -o /tmp/c4.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"marketplace":"wildberries","schemes":["fbo"],"token":"ci-probe-token"}' "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"status":"probe_unavailable"' /tmp/c4.json
+          [ "$code" = "200" ] && grep -q '"status":"probe_unavailable"' /tmp/c4.json \
+            || { echo "::error::FAIL: пробы на :9 — 200 probe_unavailable (детерминированно)"; exit 1; }
           code=$(curl -s --max-time 10 -o /tmp/c5.json -w '%{http_code}' "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"connections":\[\]' /tmp/c5.json
+          [ "$code" = "200" ] && grep -q '"connections":\[\]' /tmp/c5.json \
+            || { echo "::error::FAIL: неуспешная проба не сохраняет — GET пуст"; exit 1; }
           # DELETE идемпотентен: отсутствие строки — 200.
           code=$(curl -s --max-time 10 -o /tmp/c6.json -w '%{http_code}' -X DELETE "$base/v1/connections/wildberries?$qs")
-          [ "$code" = "200" ] && grep -q '"status":"deleted"' /tmp/c6.json
+          [ "$code" = "200" ] && grep -q '"status":"deleted"' /tmp/c6.json \
+            || { echo "::error::FAIL: DELETE идемпотентен — 200 deleted"; exit 1; }
           echo "e2e подключений 1.3 отработали (422 / probe_unavailable-не-сохраняет / DELETE)"
       - name: триггер updated_at — UPDATE строки обновляет updated_at (Story 1.3, deferred 1.1)
         run: |
@@ -526,23 +556,24 @@ jobs:
           psql_exec -tAc "SELECT CASE WHEN updated_at > created_at \
             THEN 'trigger-present' ELSE 'trigger-missing' END \
             FROM marketplace_connections WHERE id = '22222222-2222-2222-2222-222222222222';" \
-            | grep -qx 'trigger-present'
+            | grep -qx 'trigger-present' || { echo "::error::FAIL: триггер set_updated_at не поднял updated_at после UPDATE"; exit 1; }
           psql_exec -c "DELETE FROM marketplace_connections WHERE id = '22222222-2222-2222-2222-222222222222'; \
             DELETE FROM organizations WHERE id = '11111111-1111-1111-1111-111111111111';" > /dev/null
           echo "триггер set_updated_at подтверждён (updated_at > created_at после UPDATE)"
       - name: "шаг 1.3 (e2e) — полный verified-лайфсайкл через локальную заглушку проб"
         run: |
-          # Формальное ревью 1.3 (HIGH): шаг исполняется из КОРНЯ (compose-пути
-          # pult/deploy/... записаны от корня), а бинарь — полным путём
-          # pult/target/debug/pult-gateway (ранее голый target/debug/...
-          # не резолвился из корня — вся верификация лайфсайкла не исполнялась).
-          # Локальная 2xx-заглушка проб (все GET/POST → 200): persistence-путь
-          # (save → GET → ротация → DELETE + plaintext не в шифротексте и логах)
-          # обязан исполняться автоматически, а не только живьём владельцем.
+          # Диагностика сбоя run 3e5d9d0 (integration красная, шаг молчал 3с):
+          # ассерты вида [ тест ] && grep при bash -e либо умирают МОЛЧА
+          # (отказ последней команды AND-списка), либо «мягко» пропускаются
+          # (отказ НЕ последней команды — шаг продолжает работу, ложное
+          # зелёное). Каждая проверка теперь громкая: при любом несоответствии
+          # печатаются код, тело ответа, лог заглушки (достигали ли её пробы)
+          # и лог шлюза (verified / probe_unavailable / store-ошибка).
           cat > /tmp/probe_stub.py << 'PYEOF'
           from http.server import BaseHTTPRequestHandler, HTTPServer
           class Stub(BaseHTTPRequestHandler):
               def _ok(self):
+                  print('STUB <- %s %s' % (self.command, self.path), flush=True)
                   self.send_response(200)
                   self.send_header('Content-Type', 'application/json')
                   body = b'{}'
@@ -556,6 +587,21 @@ jobs:
           PYEOF
           nohup python3 /tmp/probe_stub.py > /tmp/probe-stub.log 2>&1 &
           echo $! > /tmp/probe-stub.pid
+          # Громкие проверки: fail печатает evidence (тела, логи) и роняет шаг.
+          dump_evidence() {
+            echo "--- /tmp/probe-stub.log: достигали ли пробы заглушки ---"
+            cat /tmp/probe-stub.log 2>/dev/null || true
+            echo "--- /tmp/pult-gateway-3.log (хвост 80) ---"
+            tail -n 80 /tmp/pult-gateway-3.log 2>/dev/null || true
+          }
+          fail() { echo "::error::FAIL: $1"; dump_evidence; exit 1; }
+          check_code() { [ "$2" = "$3" ] || fail "$1 — код $2, ожидался $3"; }
+          check_body() { grep -q "$2" "$3" 2>/dev/null || fail "$1 — в теле ответа нет: $2"; }
+          check_absent() { ! grep -q "$2" "$3" 2>/dev/null || fail "$1 — в теле найдено запрещённое: $2"; }
+          psql_count() {
+            docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+              psql -U pult -d pult -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true
+          }
           # Readiness-полл заглушки (формальное ревью 1.3: голый sleep 1 —
           # гонка с медленным стартом python).
           stub_ok=0
@@ -563,7 +609,7 @@ jobs:
             if curl -s --max-time 2 -o /dev/null http://127.0.0.1:18081/any; then stub_ok=1; break; fi
             sleep 0.5
           done
-          [ "$stub_ok" = "1" ] || { echo "заглушка проб не поднялась"; exit 1; }
+          [ "$stub_ok" = "1" ] || fail "заглушка проб не поднялась"
           # Перезапуск шлюза с override на ЗАГЛУШКУ (job-level override :9 —
           # для предыдущего шага probe_unavailable): степ-окружение сильнее
           # job-level. Старый процесс гасим (иначе порт 8080 занят); новый
@@ -574,66 +620,103 @@ jobs:
           DATABASE_URL=postgres://pult:pult@localhost:5432/pult \
             nohup pult/target/debug/pult-gateway > /tmp/pult-gateway-3.log 2>&1 &
           echo $! > /tmp/pult-gateway.pid
+          hcode=000
           for i in $(seq 1 30); do
             hcode=$(curl -s --max-time 10 -o /tmp/h3.json -w '%{http_code}' http://localhost:8080/health || true)
             [ "$hcode" = "200" ] && break
             sleep 1
           done
-          [ "$hcode" = "200" ] || { echo "шлюз с override-заглушкой не поднялся"; exit 1; }
+          check_code "шлюз с override-заглушкой не поднялся (/health)" "$hcode" "200"
           base='http://localhost:8080'
           qs='DOMAIN=ci-verified.example&USER_ID=11'
           body_wb='{"marketplace":"wildberries","schemes":["fbo","fbs"],"token":"ci-plaintext-secret-1234"}'
           # Автотест подтверждён → verified, шифротекст записан.
           code=$(curl -s --max-time 30 -o /tmp/v0.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-            -d "$body_wb" "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"status":"verified"' /tmp/v0.json \
-            && grep -q '"name":"Статистика"' /tmp/v0.json
+            -d "$body_wb" "$base/v1/connections?$qs" || true)
+          check_code "POST WB (первичное подключение)" "$code" "200"
+          check_body "POST WB → verified" '"status":"verified"' /tmp/v0.json
+          check_body "POST WB → право категории «Статистика»" '"name":"Статистика"' /tmp/v0.json
           # GET показывает строку (без секретов).
-          code=$(curl -s --max-time 10 -o /tmp/v1.json -w '%{http_code}' "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"marketplace":"wildberries"' /tmp/v1.json \
-            && grep -q '"schemes":\["fbo","fbs"\]' /tmp/v1.json
-          ! grep -q 'ci-plaintext-secret' /tmp/v1.json
+          code=$(curl -s --max-time 10 -o /tmp/v1.json -w '%{http_code}' "$base/v1/connections?$qs" || true)
+          check_code "GET подключений после save" "$code" "200"
+          check_body "GET → wildberries" '"marketplace":"wildberries"' /tmp/v1.json
+          check_body "GET → схемы fbo+fbs" '"schemes":\["fbo","fbs"\]' /tmp/v1.json
+          check_absent "GET без plaintext токена" 'ci-plaintext-secret' /tmp/v1.json
           # Ротация: повторный POST перезаписывает (ON CONFLICT DO UPDATE), а не дублирует.
           code=$(curl -s --max-time 30 -o /tmp/v2.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-            -d '{"marketplace":"wildberries","schemes":["fbo"],"token":"ci-rotated-token-5678"}' "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"status":"verified"' /tmp/v2.json
-          code=$(curl -s --max-time 10 -o /tmp/v3.json -w '%{http_code}' "$base/v1/connections?$qs")
-          grep -q '"schemes":\["fbo"\]' /tmp/v3.json
+            -d '{"marketplace":"wildberries","schemes":["fbo"],"token":"ci-rotated-token-5678"}' "$base/v1/connections?$qs" || true)
+          check_code "POST WB (ротация)" "$code" "200"
+          check_body "ротация → verified" '"status":"verified"' /tmp/v2.json
+          code=$(curl -s --max-time 10 -o /tmp/v3.json -w '%{http_code}' "$base/v1/connections?$qs" || true)
+          check_code "GET после ротации" "$code" "200"
+          check_body "ротация перезаписала схемы (ровно fbo)" '"schemes":\["fbo"\]' /tmp/v3.json
           # Ozon-нога (формальное ревью 1.3, AC-3): client_id сохраняется и
           # возвращается GET-ом — до этого шага verified-путь Ozon не исполнялся
           # ни одной автоматической проверкой.
           code=$(curl -s --max-time 30 -o /tmp/v6.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-            -d '{"marketplace":"ozon","schemes":["fbo","rfbs"],"token":"ci-ozon-key-9012","client_id":"424242"}' "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"status":"verified"' /tmp/v6.json
-          code=$(curl -s --max-time 10 -o /tmp/v7.json -w '%{http_code}' "$base/v1/connections?$qs")
-          grep -q '"marketplace":"ozon"' /tmp/v7.json \
-            && grep -q '"client_id":"424242"' /tmp/v7.json \
-            && grep -q '"schemes":\["fbo","rfbs"\]' /tmp/v7.json
-          ! grep -q 'ci-ozon-key' /tmp/v7.json
+            -d '{"marketplace":"ozon","schemes":["fbo","rfbs"],"token":"ci-ozon-key-9012","client_id":"424242"}' "$base/v1/connections?$qs" || true)
+          check_code "POST Ozon" "$code" "200"
+          check_body "Ozon → verified" '"status":"verified"' /tmp/v6.json
+          code=$(curl -s --max-time 10 -o /tmp/v7.json -w '%{http_code}' "$base/v1/connections?$qs" || true)
+          check_code "GET обеих площадок" "$code" "200"
+          check_body "GET → ozon" '"marketplace":"ozon"' /tmp/v7.json
+          check_body "GET → client_id 424242" '"client_id":"424242"' /tmp/v7.json
+          check_body "GET → схемы Ozon fbo+rfbs" '"schemes":\["fbo","rfbs"\]' /tmp/v7.json
+          check_absent "GET Ozon без plaintext ключа" 'ci-ozon-key' /tmp/v7.json
           # Инвариант логов (формальное ревью 1.3): plaintext токенов НЕ в логе
           # шлюза (маски «…1234/…5678» этих подстрок не содержат).
-          ! grep -q 'ci-plaintext-secret' /tmp/pult-gateway-3.log
-          ! grep -q 'ci-rotated-token' /tmp/pult-gateway-3.log
-          ! grep -q 'ci-ozon-key' /tmp/pult-gateway-3.log
+          check_absent "plaintext первичного токена НЕ в логе шлюза" 'ci-plaintext-secret' /tmp/pult-gateway-3.log
+          check_absent "plaintext токена ротации НЕ в логе шлюза" 'ci-rotated-token' /tmp/pult-gateway-3.log
+          check_absent "plaintext ключа Ozon НЕ в логе шлюза" 'ci-ozon-key' /tmp/pult-gateway-3.log
           # Ровно одна строка WB (UNIQUE(organization_id, marketplace)).
-          docker compose -f pult/deploy/docker-compose.yml exec -T postgres psql -U pult -d pult -tAc \
-            "SELECT count(*) FROM marketplace_connections WHERE marketplace='wildberries'" | grep -qx '1'
+          wb_rows=$(psql_count "SELECT count(*) FROM marketplace_connections WHERE marketplace='wildberries'")
+          echo "строк WB в БД: $wb_rows"
+          [ "$wb_rows" = "1" ] || fail "ожидалась ровно 1 строка WB, получено '$wb_rows'"
           # AD-16: plaintext-подстроки токенов НЕ в шифротексте/nonce (psql).
-          docker compose -f pult/deploy/docker-compose.yml exec -T postgres psql -U pult -d pult -tAc \
-            "SELECT count(*) FROM marketplace_connections \
-             WHERE encode(token_ciphertext, 'escape') LIKE '%ci-plaintext-secret%' \
-                OR encode(token_ciphertext, 'escape') LIKE '%ci-rotated-token%' \
-                OR encode(token_ciphertext, 'escape') LIKE '%ci-ozon-key%' \
-                OR encode(token_nonce, 'escape') LIKE '%ci-%'" | grep -qx '0'
+          leak_rows=$(psql_count "SELECT count(*) FROM marketplace_connections \
+            WHERE encode(token_ciphertext, 'escape') LIKE '%ci-plaintext-secret%' \
+               OR encode(token_ciphertext, 'escape') LIKE '%ci-rotated-token%' \
+               OR encode(token_ciphertext, 'escape') LIKE '%ci-ozon-key%' \
+               OR encode(token_nonce, 'escape') LIKE '%ci-%'")
+          echo "строк с plaintext-подстроками в шифротексте/nonce: $leak_rows"
+          [ "$leak_rows" = "0" ] || fail "plaintext-подстроки в шифротексте/nonce: '$leak_rows' строк"
           # DELETE существующей строки → GET снова пуст.
-          code=$(curl -s --max-time 10 -o /tmp/v4.json -w '%{http_code}' -X DELETE "$base/v1/connections/wildberries?$qs")
-          [ "$code" = "200" ] && grep -q '"status":"deleted"' /tmp/v4.json
-          code=$(curl -s --max-time 10 -o /tmp/v5.json -w '%{http_code}' "$base/v1/connections?$qs")
-          [ "$code" = "200" ] && grep -q '"connections":\[\]' /tmp/v5.json
+          code=$(curl -s --max-time 10 -o /tmp/v4.json -w '%{http_code}' -X DELETE "$base/v1/connections/wildberries?$qs" || true)
+          check_code "DELETE WB" "$code" "200"
+          check_body "DELETE → deleted" '"status":"deleted"' /tmp/v4.json
+          code=$(curl -s --max-time 10 -o /tmp/v5.json -w '%{http_code}' "$base/v1/connections?$qs" || true)
+          check_code "GET после DELETE" "$code" "200"
+          check_body "GET → пустой список" '"connections":\[\]' /tmp/v5.json
           kill "$(cat /tmp/probe-stub.pid)" 2>/dev/null || true
           echo "verified-лайфсайкл 1.3 подтверждён (save/GET/ротация/DELETE, plaintext не в БД)"
+      - name: "интеграция — evidence dump при сбое e2e (тела, логи, БД)"
+        # Диагностика сбоя 3e5d9d0: тела ответов и логи не сохранялись нигде —
+        # единственный упавший шаг оставлял ноль улик. Дамп безвреден при
+        # успехе (не запускается) и не трогает секреты (длины bytea, не значения).
+        if: failure()
+        run: |
+          echo "=== тела ответов e2e (/tmp/*.json) ==="
+          for f in /tmp/s0.json /tmp/s1.json /tmp/s2.json /tmp/s3.json /tmp/v0.json /tmp/v1.json \
+                   /tmp/v2.json /tmp/v3.json /tmp/v4.json /tmp/v5.json /tmp/v6.json /tmp/v7.json \
+                   /tmp/c0.json /tmp/c1.json /tmp/c2.json /tmp/c3.json /tmp/c4.json /tmp/c5.json \
+                   /tmp/c6.json /tmp/c7.json /tmp/h3.json /tmp/health.json /tmp/ready.json; do
+            [ -f "$f" ] || continue
+            echo "--- $f ---"
+            cat "$f" 2>/dev/null || true
+            echo
+          done
+          echo "=== /tmp/probe-stub.log ==="
+          cat /tmp/probe-stub.log 2>/dev/null || true
+          echo "=== /tmp/pult-gateway-3.log (хвост 100) ==="
+          tail -n 100 /tmp/pult-gateway-3.log 2>/dev/null || true
+          echo "=== marketplace_connections (секреты скрыты — только длины bytea) ==="
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -c "SELECT id, organization_id, marketplace, schemes, status, client_id, key_version, verified_at, created_at, updated_at, length(token_ciphertext) AS ct_len, length(token_nonce) AS nonce_len FROM marketplace_connections" || true
+          echo "=== organizations ==="
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -c "SELECT id, name, b24_member_id FROM organizations ORDER BY created_at" || true
       - name: остановить шлюз
         if: always()
         run: |
           kill "$(cat /tmp/pult-gateway.pid)" 2>/dev/null || true
-          tail -n 40 /tmp/pult-gateway.log /tmp/pult-gateway-2.log 2>/dev/null || true
+          tail -n 40 /tmp/pult-gateway.log /tmp/pult-gateway-2.log /tmp/pult-gateway-3.log /tmp/probe-stub.log 2>/dev/null || true

@@ -11,3 +11,5 @@ target/
 pult/shells/bitrix24/dist/
 
 scripts/review-*/
+# Диагностика сессии (логи CI, валидаторы) — не проектный код
+/scripts/
