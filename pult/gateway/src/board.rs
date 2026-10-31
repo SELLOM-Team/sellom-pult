@@ -154,6 +154,9 @@ impl OrdersBoardReader for PgBoardReader {
 
             // 2. Позиции пачкой по показанным заказам (составной FK-путь
             //    idx_order_items_order; заказов на витрине ≤ 7 × лимит).
+            //    `quantity::bigint` обязателен: колонка INT4, а sqlx декодирует
+            //    i64 только из INT8 (runtime-запросы без макросов это не ловят
+            //    на компиляции — поймано живым CI e2e 31.10, run #36).
             let shown: Vec<Uuid> = snapshot
                 .columns
                 .values()
@@ -161,8 +164,8 @@ impl OrdersBoardReader for PgBoardReader {
                 .collect();
             if !shown.is_empty() {
                 let items: Vec<BoardItemRow> = sqlx::query_as(
-                    "SELECT order_id, supplier_article, tech_size, nm_id, quantity, \
-                                (total_price * 100)::bigint \
+                    "SELECT order_id, supplier_article, tech_size, nm_id, \
+                                quantity::bigint, (total_price * 100)::bigint \
                          FROM order_items \
                          WHERE organization_id = $1 AND order_id = ANY($2)",
                 )

@@ -1035,7 +1035,7 @@ jobs:
           st=$(psql_count "SELECT status FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
           done_n=$(psql_count "SELECT windows_done FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
           tot=$(psql_count "SELECT windows_total FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
-          cu=$(psql_count "SELECT completed_until::text FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
+          cu=$(psql_count "SELECT (checkpoint->>'completed_until') FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
           echo "после kill -9: status=$st windows_done=$done_n/$tot completed_until=$cu"
           [ "$st" = "running" ] || fail "после краха статус ≠ running ($st)"
           [ "$tot" = "5" ] || fail "windows_total ≠ 5 ($tot)"
@@ -1136,7 +1136,7 @@ jobs:
             psql -U pult -d pult -c "SELECT id, organization_id, marketplace, schemes, status, client_id, key_version, verified_at, created_at, updated_at, length(token_ciphertext) AS ct_len, length(token_nonce) AS nonce_len FROM marketplace_connections" || true
           echo "=== sync_runs (Story 1.4: циклы, чекпоинты, счётчики) ==="
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
-            psql -U pult -d pult -c "SELECT r.organization_id, g.b24_member_id, r.cycle_type, r.status, r.windows_done, r.windows_total, r.orders_fetched, r.events_published, r.completed_until, r.error_hint, r.started_at, r.finished_at FROM sync_runs r JOIN organizations g ON g.id = r.organization_id ORDER BY g.b24_member_id" || true
+            psql -U pult -d pult -c "SELECT r.organization_id, g.b24_member_id, r.cycle_type, r.status, r.windows_done, r.windows_total, r.orders_fetched, r.events_published, (r.checkpoint->>'completed_until') AS completed_until, r.error_hint, r.started_at, r.finished_at FROM sync_runs r JOIN organizations g ON g.id = r.organization_id ORDER BY g.b24_member_id" || true
           echo "=== orders/order_items (проекция канбана, секретов нет) ==="
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -c "SELECT o.id, g.b24_member_id, o.marketplace, o.external_order_id, o.scheme, o.board_column, o.status_code, o.total_price, o.is_cancelled FROM orders o JOIN organizations g ON g.id = o.organization_id ORDER BY g.b24_member_id, o.external_order_id" || true
