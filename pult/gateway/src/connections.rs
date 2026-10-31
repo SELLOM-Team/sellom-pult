@@ -1846,9 +1846,17 @@ mod tests {
             migrations_applied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             perimeter: crate::onboarding::PgPerimeterStore::new(db.clone()),
             connections: crate::ConnectionsDeps {
-                store: PgConnectionStore::new(db),
+                store: PgConnectionStore::new(db.clone()),
                 cipher: Arc::new(cipher()),
                 probe,
+            },
+            // Story 1.4: lazy-пул и здесь — хендлеры подключений не касаются
+            // витрины синка; случайное касание ломает тест честным 503.
+            sync: crate::SyncDeps {
+                org: Arc::new(crate::onboarding::PgPerimeterStore::new(db.clone())),
+                progress: Arc::new(crate::sync::PgSyncProgressReader::new(db.clone())),
+                retry: Arc::new(crate::sync::PgSyncRetryMutator::new(db.clone())),
+                board: Arc::new(crate::board::PgBoardReader::new(db)),
             },
         }
     }

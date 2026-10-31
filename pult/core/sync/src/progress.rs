@@ -5,6 +5,8 @@
 //! Честность (инвариант спеки): процент считается ТОЛЬКО по подтверждённым
 //! чекпоинтами окнам — «на глазок» скорости ничего не приписывается.
 
+use crate::ports::RunStatus;
+
 /// Фаза цикла синка (прогресс-контракт `/v1/sync/progress`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncPhase {
@@ -14,6 +16,33 @@ pub enum SyncPhase {
     FetchingHistory,
     /// Цикл закрыт успешно.
     Completed,
+}
+
+impl SyncPhase {
+    /// Код фазы — контракт `/v1/sync/progress` (литерал живёт в домене —
+    /// словарь фаз часть прогресс-контракта, не HTTP-детали).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SyncPhase::Pending => "pending",
+            SyncPhase::FetchingHistory => "fetching_history",
+            SyncPhase::Completed => "completed",
+        }
+    }
+}
+
+/// Фаза цикла из статуса и счётчиков (чистая производная витрины):
+/// - `succeeded`/`superseded` — цикл закрыт (`completed`; superseded —
+///   замена цикла, для витрины это тоже терминальная точка);
+/// - `pending` без единого подтверждённого окна — ещё не начинался;
+/// - прочее (в том числе `pending` после сброса ретрая с уже съеденными
+///   окнами, `running`, `needs_retry`, `failed`) — фаза чтения истории:
+///   цикл в ней (активно или с чекпоинтом), исход виден в `status`.
+pub fn cycle_phase(status: RunStatus, counters: CycleCounters) -> SyncPhase {
+    match status {
+        RunStatus::Succeeded | RunStatus::Superseded => SyncPhase::Completed,
+        RunStatus::Pending if counters.windows_done == 0 => SyncPhase::Pending,
+        _ => SyncPhase::FetchingHistory,
+    }
 }
 
 /// Счётчики цикла (материал расчёта прогресса).
@@ -105,5 +134,71 @@ mod tests {
         assert_eq!(cycle_eta_secs(Some(1_000.0), done), Some(0));
         // нулевая/отрицательная «скорость» — мусорный вход → None
         assert_eq!(cycle_eta_secs(Some(0.0), c), None);
+    }
+
+    #[test]
+    fn phase_pending_fresh_cycle() {
+        // создан, окон не начато
+        assert_eq!(
+            cycle_phase(
+                RunStatus::Pending,
+                CycleCounters {
+                    windows_total: 5,
+                    windows_done: 0,
+                },
+            ),
+            SyncPhase::Pending
+        );
+    }
+
+    #[test]
+    fn phase_running_is_fetching_history() {
+        let c = |done: u32| CycleCounters {
+            windows_total: 5,
+            windows_done: done,
+        };
+        assert_eq!(
+            cycle_phase(RunStatus::Running, c(0)),
+            SyncPhase::FetchingHistory
+        );
+        // сбойные статусы в фазе чтения истории: цикл в ней, исход — в status
+        assert_eq!(
+            cycle_phase(RunStatus::NeedsRetry, c(2)),
+            SyncPhase::FetchingHistory
+        );
+        assert_eq!(
+            cycle_phase(RunStatus::Failed, c(2)),
+            SyncPhase::FetchingHistory
+        );
+        // pending после сброса ретрая: окна уже съедены — это продолжение,
+        // не «начало с нуля»
+        assert_eq!(
+            cycle_phase(RunStatus::Pending, c(2)),
+            SyncPhase::FetchingHistory
+        );
+    }
+
+    #[test]
+    fn phase_terminal_statuses_are_completed() {
+        let full = CycleCounters {
+            windows_total: 5,
+            windows_done: 5,
+        };
+        assert_eq!(
+            cycle_phase(RunStatus::Succeeded, full),
+            SyncPhase::Completed
+        );
+        // superseded — терминальная точка витрины (замена цикла — будущие сторис)
+        assert_eq!(
+            cycle_phase(RunStatus::Superseded, full),
+            SyncPhase::Completed
+        );
+    }
+
+    #[test]
+    fn phase_literals_contract() {
+        assert_eq!(SyncPhase::Pending.as_str(), "pending");
+        assert_eq!(SyncPhase::FetchingHistory.as_str(), "fetching_history");
+        assert_eq!(SyncPhase::Completed.as_str(), "completed");
     }
 }

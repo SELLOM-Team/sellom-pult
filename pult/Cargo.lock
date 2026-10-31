@@ -1736,6 +1736,7 @@ dependencies = [
  "axum",
  "chrono",
  "pult-core-identity",
+ "pult-core-sync",
  "pult-platform",
  "reqwest",
  "serde",

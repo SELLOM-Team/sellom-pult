@@ -14,12 +14,14 @@
 //! получившего [`pult_core_identity::ports::TokenCipher`] (write-only vault
 //! 1.3 получает первого потребителя decrypt именно здесь, в конвейере).
 
+use std::collections::BTreeMap;
 use std::future::Future;
+use std::pin::Pin;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::orders::CanonicalOrder;
+use crate::orders::{BoardCard, BoardColumn, CanonicalOrder};
 
 /// Окно дат цикла синка (границы включительно; AD-3: единица чекпоинта).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +75,22 @@ impl RunStatus {
             RunStatus::Failed => "failed",
             RunStatus::NeedsRetry => "needs_retry",
             RunStatus::Superseded => "superseded",
+        }
+    }
+
+    /// Обратный [`RunStatus::as_str`] — чтение витрины `sync_runs` сторами
+    /// (шлюз и воркеры); `None` для значений вне CHECK-словаря — честная
+    /// ошибка «повреждённые данные» вместо молчаливой подмены. Прецедент —
+    /// [`crate::orders::BoardColumn::from_code`].
+    pub fn from_code(raw: &str) -> Option<Self> {
+        match raw {
+            "pending" => Some(RunStatus::Pending),
+            "running" => Some(RunStatus::Running),
+            "succeeded" => Some(RunStatus::Succeeded),
+            "failed" => Some(RunStatus::Failed),
+            "needs_retry" => Some(RunStatus::NeedsRetry),
+            "superseded" => Some(RunStatus::Superseded),
+            _ => None,
         }
     }
 }
@@ -280,4 +298,101 @@ pub trait SyncCheckpointStore {
     /// Сохраняет состояние ПОСЛЕ подтверждённого окна (чекпоинт-инвариант):
     /// запись атомарна; воркер после сбоя продолжает с `windows_done`.
     fn save(&self, state: &SyncRunState) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
+
+// ── витрина синка для шлюза (Story 1.4: /v1/sync/*, /v1/board/*) ─────────────
+//
+// Порты чтения прогресса/доски и команда ретрая объявлены объектно-совместимыми
+// (Pin<Box<dyn Future>> — прецедент `RightsProbe` ядра identity): шлюз держит
+// их за `Arc<dyn …>` и подменяет in-memory фейками в тестах хендлеров, а
+// sqlx-адаптеры (PG) живут в самом шлюзе — у каждого композиционного корня
+// свои адаптеры (AD-1: шлюз не импортирует сторы воркеров).
+
+/// Прогресс цикла для витрины `/v1/sync/progress`: состояние домена + момент
+/// первого старта (наблюдаемая скорость ETA: `started_at` COALESCE-ится стором
+/// с первого перехода в running — паузы needs_retry в оценку активного цикла
+/// не попадают, неактивный цикл ETA не обещает).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncProgress {
+    /// Состояние цикла (строка `sync_runs`).
+    pub state: SyncRunState,
+    /// Первый старт цикла (NULL — окна не начинались).
+    pub started_at: Option<DateTime<Utc>>,
+}
+
+/// Исход команды повтора цикла (POST /v1/sync/retry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryOutcome {
+    /// `failed → pending`: цикл продолжится с чекпоинта планировщиком. Сброс —
+    /// единственный способ оживить терминальный `failed`: оркестратор
+    /// идемпотентно возвращает терминальные строки как есть, без запросов.
+    Reset,
+    /// Без изменений: текущий статус подхвата сам (pending/running/needs_retry
+    /// — планировщик) либо завершён (succeeded/superseded — ретраить нечего).
+    Unchanged(RunStatus),
+}
+
+/// Боксированная футура витрины (объектная совместимость портов чтения —
+/// clippy type_complexity: сигнатура скрыта за осмысленным именем).
+pub type SyncReadFuture<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
+
+/// Порт: чтение прогресса цикла (шлюз; закрывается sqlx-стором шлюза).
+pub trait SyncProgressReader: Send + Sync {
+    /// Ошибка чтения.
+    type Error;
+
+    /// Прогресс цикла организации (None — цикл ещё не начинался).
+    fn load_progress<'a>(
+        &'a self,
+        organization_id: Uuid,
+        cycle: CycleType,
+    ) -> SyncReadFuture<'a, Option<SyncProgress>, Self::Error>;
+}
+
+/// Порт: команда повторения цикла после исправимого сбоя (шлюз).
+pub trait SyncRetryMutator: Send + Sync {
+    /// Ошибка мутации.
+    type Error;
+
+    /// Идемпотентный ретрай: сбрасывает ТОЛЬКО `failed` (адаптер атомарно
+    /// UPDATE … WHERE status='failed'); прочие статусы — [`RetryOutcome::Unchanged`];
+    /// `Ok(None)` — строки цикла нет (синк не стартовал — нечего ретраить).
+    fn request_retry<'a>(
+        &'a self,
+        organization_id: Uuid,
+        cycle: CycleType,
+    ) -> SyncReadFuture<'a, Option<RetryOutcome>, Self::Error>;
+}
+
+/// Снимок доски канбана (витрина `/v1/board/orders`): карточки по колонкам
+/// (лимит на колонку, свежие первыми — сортировка стора) + счётчики ВСЕХ строк
+/// колонок (показаны первые N, всего — `totals`; честность «показано из»).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BoardSnapshot {
+    /// Карточки на колонку (пустая колонка может отсутствовать ключом).
+    pub columns: BTreeMap<BoardColumn, Vec<BoardCard>>,
+    /// Счётчики всех строк колонок (GROUP BY стора; отсутствует = 0).
+    pub totals: BTreeMap<BoardColumn, u64>,
+}
+
+impl BoardSnapshot {
+    /// Доска пуста — ни одного заказа в проекции (шлюз решает honest-ответ
+    /// по состоянию цикла: пусто+`succeeded` — честная заглушка «заказов
+    /// пока нет», пусто+идёт — «данные ещё синкаются», спека 1.4).
+    pub fn is_empty(&self) -> bool {
+        self.totals.values().all(|count| *count == 0)
+    }
+}
+
+/// Порт: чтение доски канбана организации (шлюз; sqlx-стор шлюза).
+pub trait OrdersBoardReader: Send + Sync {
+    /// Ошибка чтения.
+    type Error;
+
+    /// Снимок доски: до `limit_per_column` карточек на колонку + счётчики.
+    fn board_orders<'a>(
+        &'a self,
+        organization_id: Uuid,
+        limit_per_column: u32,
+    ) -> Pin<Box<dyn Future<Output = Result<BoardSnapshot, Self::Error>> + Send + 'a>>;
 }

@@ -16,7 +16,9 @@ use pult_core_identity::vault::Scheme;
 
 /// Колонка канбана — канонический словарь FR-16: 7 колонок
 /// «новый → к сборке → к отгрузке → в пути → доставлен → возврат → риск».
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `Ord` — порядок декларации = порядок витрины доски ([`BoardSnapshot`]
+/// группирует карточки в `BTreeMap` — итерация отдаёт колонки слева направо).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BoardColumn {
     /// новый
     New,
@@ -170,6 +172,56 @@ fn hex_lower(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+}
+
+/// Карточка канбана (витрина `/v1/board/orders`, FR-16-минимум): заказ с
+/// позициями и суммами — ровно то, что нужно колонке; без PII (контакты FBS
+/// не синкаются в 1.4 — спека). Чтение проекции, не событие: строки словарей
+/// (площадка/схема) приходят из БД как есть — CHECK-словари миграции 0007
+/// гарантируют их состав, отдельного парсинга витрина не требует.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoardCard {
+    /// Внутренний id строки проекции (ссылки UI).
+    pub id: Uuid,
+    /// Внешний id заказа у площадки (orderId в WB).
+    pub external_order_id: String,
+    /// Площадка (`wildberries`/`ozon` — словарь CHECK).
+    pub marketplace: String,
+    /// Схема работы (`fbo`/`fbs`/`realfbs`/`rfbs` — словарь CHECK).
+    pub scheme: String,
+    /// Колонка канбана (дублируется в DTO для самодостаточности карточки).
+    pub board_column: BoardColumn,
+    /// Сырой код статуса площадки (диагностика на карточке).
+    pub status_code: Option<String>,
+    /// Склад отгрузки.
+    pub warehouse_name: Option<String>,
+    /// Сумма заказа, копейки.
+    pub total_price_kopecks: i64,
+    /// Валюта (RUB).
+    pub currency: String,
+    /// Заказ отменён площадкой (метка на карточке).
+    pub is_cancelled: bool,
+    /// Дата заказа.
+    pub order_date: Option<DateTime<Utc>>,
+    /// Последнее изменение (статусная метка времени).
+    pub last_change_at: Option<DateTime<Utc>>,
+    /// Позиции карточки.
+    pub items: Vec<BoardCardItem>,
+}
+
+/// Позиция карточки канбана (агрегат строки статистики).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoardCardItem {
+    /// Артикул продавца.
+    pub supplier_article: Option<String>,
+    /// Размер.
+    pub tech_size: Option<String>,
+    /// Артикул площадки (nmId).
+    pub nm_id: Option<i64>,
+    /// Количество.
+    pub quantity: i64,
+    /// Цена позиции, копейки.
+    pub total_price_kopecks: i64,
 }
 
 /// Вход нормализации статуса WB (то, что статистика даёт в строке заказа).

@@ -13,11 +13,20 @@
 //! модуль [`connections`] (`/v1/connections`, GET/POST/DELETE) с шифрованием
 //! AES-256-GCM из `PULT_VAULT_MASTER_KEY` и пробами прав API площадок.
 //! Семантика `/health` и `/ready` не меняется (проверено ревью 1.1).
+//!
+//! Story 1.4 (первичный синк и первый канбан): витрина синка — модуль
+//! [`sync`] (`/v1/sync/progress`, `/v1/sync/retry`) и доска — модуль
+//! [`board`] (`/v1/board/orders`): честные фаза/процент/ETA из домена
+//! `core::sync::progress`, идемпотентный ретрай терминального `failed`,
+//! 7 колонок FR-16 с honest-пустыми состояниями.
 
+mod board;
 mod connections;
 mod onboarding;
+mod sync;
 
 pub(crate) use connections::ConnectionsDeps;
+pub(crate) use sync::SyncDeps;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -57,6 +66,9 @@ struct AppState {
     /// Зависимости подключений площадок (Story 1.3): стор, шифратор,
     /// проба прав (порт RightsProbe домена identity).
     connections: ConnectionsDeps,
+    /// Зависимости витрины синка и доски (Story 1.4): резолвер организации,
+    /// чтение прогресса, ретрай, доска (порты чтения core/sync).
+    sync: SyncDeps,
 }
 
 /// Тело ответа /health и /ready.
@@ -220,11 +232,23 @@ async fn main() {
         probe: Arc::new(probe),
     };
 
+    // Story 1.4: витрина синка и доска — композиция портов чтения core/sync
+    // (объектно-совместимые трейты; sqlx-адаптеры шлюза, не воркеров).
+    // Резолвер организации — тот же стор периметра (placement→org, 1.2).
+    let sync_deps = SyncDeps {
+        org: Arc::new(perimeter_store.clone()),
+        progress: Arc::new(sync::PgSyncProgressReader::new(db.clone())),
+        retry: Arc::new(sync::PgSyncRetryMutator::new(db.clone())),
+        board: Arc::new(board::PgBoardReader::new(db.clone())),
+    };
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
         .merge(onboarding::router())
         .merge(connections::router())
+        .merge(sync::router())
+        .merge(board::router())
         // Договор об ошибках: любой маршрут отвечает конвертом — и 404/405 тоже
         // (ревью Story 1.2: пустые дефолты axum обходят контракты /v1).
         .fallback(onboarding::not_found)
@@ -235,6 +259,7 @@ async fn main() {
             migrations_applied,
             perimeter: perimeter_store,
             connections: connections_deps,
+            sync: sync_deps,
         });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.http_port));

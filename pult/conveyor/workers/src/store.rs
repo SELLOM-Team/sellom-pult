@@ -45,18 +45,6 @@ impl From<sqlx::Error> for WorkerStoreError {
     }
 }
 
-fn run_status_from_code(raw: &str) -> Option<RunStatus> {
-    match raw {
-        "pending" => Some(RunStatus::Pending),
-        "running" => Some(RunStatus::Running),
-        "succeeded" => Some(RunStatus::Succeeded),
-        "failed" => Some(RunStatus::Failed),
-        "needs_retry" => Some(RunStatus::NeedsRetry),
-        "superseded" => Some(RunStatus::Superseded),
-        _ => None,
-    }
-}
-
 /// SQL-представление границ окна (epoch-ms → double → timestamptz).
 fn epoch_secs(ts: DateTime<Utc>) -> f64 {
     ts.timestamp() as f64 + ts.timestamp_subsec_nanos() as f64 / 1e9
@@ -101,7 +89,7 @@ impl SyncCheckpointStore for PgSyncCheckpointStore {
         let Some((status_raw, completed_raw, total, done, fetched, published, hint)) = row else {
             return Ok(None);
         };
-        let status = run_status_from_code(&status_raw)
+        let status = RunStatus::from_code(&status_raw)
             .ok_or(WorkerStoreError::Corrupt("status вне CHECK-словаря"))?;
         let completed_until = match completed_raw {
             Some(raw) if !raw.is_empty() => Some(
