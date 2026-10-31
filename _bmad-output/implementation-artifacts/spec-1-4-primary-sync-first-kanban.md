@@ -73,7 +73,7 @@ context:
 - [x] `conveyor/adapters` — WbOrdersSource: расшифровка (TokenCipher), окна дат, backoff 429/Retry-After, потолок тела, без логирования секретов; юнит-тесты (парсинг wire/фильтр окна/URL/redact; cipher round-trip vs схема шлюза; мок-HTTP уровня порта — в CI e2e)
 - [x] `conveyor/workers` — бинарный main: оркестратор (подбор org due_verified_wb: verified-WB без завершённого цикла ИЛИ pending/running(stale)/needs_retry; прогон окон от НОВЫХ к старым, чекпоинт после каждого) + consumer (ack после коммита, requeue на транзиент, битое тело — ack+лог; идемпотентность, max-revision guarded UPDATE) + sqlx-сторы (проекция/чекпоинты; epoch-bigint паттерн шлюза) + lapin-слой (quorum-топология, publisher confirms как барьер at-least-once перед чекпоинтом, per-consumer prefetch) + graceful shutdown (SIGINT/SIGTERM, tokio feature signal); 17 юнит-тестов на in-memory фейках (lapin/PG — в CI e2e, спека); план окон — сетка от history_since, граница продолжения completed_until (хвост-префикс новых окон)
 - [x] `gateway/sync.rs`/`board.rs` — 3 эндпоинта + бюджеты + конверты + placement; Rust-тесты хендлеров (мок-сторы)
-- [ ] `platform/config.rs` — новые переменные + валидация + тесты веток
+- [x] `platform/config.rs` — `WorkerConfig` (8 переменных конвейера, AR-4) консолидирован из binary-main воркеров; from_lookup-фейки без мутации env; валидация (схема AMQP, http(s)-origin базы, песочница≠prod, нули/отрицательные, RFC3339, МБ→байты checked_mul); Debug-маска AMQP-пароля; 18 тестов веток
 - [ ] compose — сервис worker (dev/CI), healthcheck; CI-интеграция: заглушка WB, e2e «заказ в канбане», дубль-событие NO-OP, чекпоинт-продолжение, 429-терпимость, plaintext-инварианты
 - [ ] SPA — доска + прогресс + retry + Ozon-копирайт; Vitest: чистые функции (борд-группировка, статус-подсветка, прогресс-скрин из JSON), api-клиент, скелетоны
 - [ ] Верификация: cargo fmt/clippy -D warnings/test --locked; npm test/build; гейты (hexagonal — adapters/workers не зависят от gateway; valkey; vault-grep теперь и на события; bundle AD-30 < 200 КБ gzip)
@@ -117,6 +117,15 @@ context:
 - Uuid workspace без feature v4 — тестовые id на now_v7 (единственный генератор проекта).
 - Домен аддитивно: `RunStatus::from_code` (дедупликация парсинга с воркерами — их приватный run_status_from_code удалён), `BoardColumn` +Ord (порядок витрины `BoardSnapshot` в BTreeMap), `BoardCard`/`BoardCardItem`, `cycle_phase` + `SyncPhase::as_str`, алиас `SyncReadFuture`. Порты воркеров не тронут.
 - Верификация вехи: fmt --check PASS; clippy --workspace --all-targets --locked ГРОМКО 0 (rg-гейт); тесты 197 зелёных (gateway 111: +25 хендлер-тестов sync/board на фейках; core/sync 14: +4 фаза; adapters 8, workers 17, identity 15, platform 32); гейты AD-1/AD-28/AD-16 PASS. CI-джоба e2e (событие→очередь→проекция→канбан) — следующая задача compose, здесь юнит-уровень.
+
+### Веха platform/config (закрыта)
+
+- `WorkerConfig` переехал из binary-main воркеров в `pult_platform::config`: те же 8 переменных и defaults, семантика «пустая/пробельная строка = не задана → default» сохранена; main — только композиция.
+- Паттерн `from_lookup` (прецедент ServiceConfig): 18 тестов веток на фейках-замыканиях без мутации окружения процесса (defaults/полные overrides/trim/пустые/NotUnicode/схема AMQP/origin базы + нормализация хвостового слэша/песочница в prod/нули и отрицательные/не-числа/RFC3339 с офсетом→UTC/МБ→байты + переполнение/Debug-маска).
+- Валидация: `PULT_RABBITMQ_URL` — схема `amqp(s)://`, userinfo/vhost легитимны (стандарт RabbitMQ-URL); `PULT_WB_STAT_BASE` — абсолютный http(s)-origin без пути/запроса/userinfo (путь строит адаптер), одиночный хвостовой `/` нормализуется (строже — CI-подмена 1.3, мягче — операторская переменная); песочница WB в prod — отказ старта (сгенерированные данные в боевой org; прецедент PULT_PROBE_HOST_OVERRIDE); нулевые таймаут/потолок тела/попытки/окно/интервал и отрицательное окно — честные InvalidEnv с объяснением последствий; МБ→байты через checked_mul (u64::MAX МБ — ошибка, не переполнение).
+- Секрет-гигиена: AMQP-URL может содержать пароль (`amqp://user:pass@host`) → Debug выведен вручную (rabbitmq_url = `***redacted***`), прецедент `VaultMasterKey` (ревью 1.3); тест на непротекание пароля через `{:?}`.
+- `WorkerConfig::from_env(environment)` принимает `Environment` из уже разобранной ServiceConfig: PULT_ENV читается один раз, контурные запреты — в одном месте.
+- Верификация вехи: fmt --check PASS; clippy --workspace --all-targets --locked ГРОМКО 0; 215 тестов зелёные (+18 platform); гейты AD-1/AD-28/AD-16 PASS.
 
 - lapin (RabbitMQ) и uuid v7 — версии веб-верифицировать при добавлении в workspace.dependencies (Директива 1; пины как AD-20-стайл); deps: tokio/axum/sqlx уже закреплены.
 - quorum-очередь объявляется декларативно (x-quorum-queue: true); приоритеты quorum-очередей поддерживаются нативно (в отличие от classic) — проверить версию RabbitMQ 4.4 в compose при имплементации.

@@ -506,3 +506,23 @@ Stage Summary:
 - Репозиторий: sellom-team/sellom-pult (публичный) — CI разблокирован переносом (сценарий D закрыт), вся история прогонов зелёная (#31/#32/#33).
 - WB-токен: владельцу нужен ПОЛНЫЙ «Базовый» токен (текущий обрезан при копировании) — единственная внешняя блокировка словаря статусов; конвейер от него не зависит.
 - Следующий шаг: platform/config (консолидация PULT_WB_STAT_BASE/PULT_RABBITMQ_URL/PULT_SYNC_* из workers/main.rs в platform-паттерн from_lookup) → compose worker-сервис + CI e2e «заказ в канбане» → SPA → формальное ревью 1.4.
+
+---
+Task ID: 20 (продолжение — веха 5: platform/config закрыта; WB-токен из чата 31.10 снова обрезан)
+Agent: main (Z.ai)
+Task: Story 1.4, задача «platform/config» — консолидация воркерских env-переменных из workers/main.rs в platform-паттерн; диагностика повторно присланного WB-токена.
+
+Work Log:
+- Сессия восстановлена по протоколу (MEMORY → worklog → git status: HEAD 389f297, рабочее дерево чистое; cargo 1.99.1/node 24 живы — среда пережила сброс без стирания).
+- WB-токен «Базовый» из сообщения владельца: ДИАГНОЗ ПОВТОРЕН — строка снова обрезана ровно на том же месте (182 символа: 2 сегмента JWT вместо 3, сигнатуры нет вообще, payload оборван посреди числа iid":50480 — префикс iid=50480428 из прошлого тестового токена). Токен СВЕЖИЙ (kid 20260903v1; id UUIDv7 → создан 31.10 14:14 UTC = 17:14 МСК; exp 2027-05-02 — тип правильный, как просили). Обрезка систематическая (два transmissions — один cut-point): режет либо копирование из UI портала WB, либо канал передачи. В .env НЕ сохранялся (огрызок нерабочий); владельцу — передать по частям (2–3 сообщениями или файлом).
+- platform/src/config.rs: + WorkerConfig (8 переменных: PULT_RABBITMQ_URL/PULT_WB_STAT_BASE/PULT_WB_TIMEOUT_SECS/PULT_WB_BODY_LIMIT_MB/PULT_WB_MAX_ATTEMPTS/PULT_SYNC_WINDOW_DAYS/PULT_SYNC_SINCE/PULT_SCHEDULER_INTERVAL_SECS; defaults и семантика «пусто=default» перенесены 1:1 из workers/main.rs). Паттерн ServiceConfig: from_env(environment) → приватный from_lookup (фейки-тесты без мутации env).
+- Валидация: AMQP-схема amqp(s):// (userinfo/vhost легитимны); PULT_WB_STAT_BASE — абсолютный http(s)-origin без пути/запроса/userinfo (путь строит адаптер), хвостовой «/» нормализуется; песочница WB в prod — отказ старта (сгенерированные данные; прецедент probe-override 1.3); нули/отрицательные (таймаут/потолок/попытки/окно/интервал) — InvalidEnv с объяснением; МБ→байты checked_mul (u64::MAX МБ — ошибка, не переполнение); PULT_SYNC_SINCE — RFC3339 с нормализацией в UTC.
+- Секрет-гигиена: Debug вручную (rabbitmq_url = ***redacted*** — AMQP-URL может нести пароль; прецедент VaultMasterKey), тест на непротекание пароля через {:?}.
+- workers/main.rs: локальный WorkerConfig/env_str/env_parse/default_history_since удалены; импорт pult_platform::config::WorkerConfig; from_env(config.environment); wb_body_limit → wb_body_limit_bytes. Инцидент правки: случайно удалены 3 строки use pult_conveyor_workers::* — восстановлены немедленно (поймано чтением файла до сборки).
+- Тесты: +18 в platform (defaults/overrides/trim/пустые/NotUnicode/схема/origin/нормализация слэша/песочница-prod/нули/не-числа/RFC3339/переполнение/Debug-маска). Исправлены 2 собственных бага тестов (unwrap_or_else вместо expect_err — err был WorkerConfig, не ошибка; поймано компилятором).
+- Верификация: fmt (применён) + --check PASS; clippy --workspace --all-targets --locked ГРОМКО 0; 215 тестов зелёные; гейты AD-1/AD-28/AD-16 PASS.
+
+Stage Summary:
+- Story 1.4: закрыто 8 из 10 задач. Остались: compose worker + CI e2e (заглушка WB: событие→очередь→проекция→канбан, дубль-NO-OP, чекпоинт-продолжение, 429-терпимость, plaintext-инварианты), SPA (доска+прогресс+retry), финальная верификация, формальное ревью.
+- Владельцу нужен ПОЛНЫЙ Базовый токен WB (текущий снова обрезан на 182-м символе) — словарь статусов останется [ASSUMPTION] до него; конвейер не блокируется.
+- Следующий шаг: compose (worker-сервис dev/CI + healthcheck) → CI e2e → SPA.

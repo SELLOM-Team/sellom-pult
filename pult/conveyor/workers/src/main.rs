@@ -14,20 +14,10 @@
 //! последнего окна уже зафиксирован (AD-3) — рестарт продолжит с него.
 //!
 //! Конфигурация: общая — через [`pult_platform::config::ServiceConfig`]
-//! (`DATABASE_URL`, `PULT_VAULT_MASTER_KEY`); воркерская — переменные ниже
-//! (консолидация в platform/config — задача «platform config» той же
-//! спеки; AR-4: значения — константы окружения, не код):
-//!
-//! | Переменная | Default | Смысл |
-//! |---|---|---|
-//! | `PULT_RABBITMQ_URL` | `amqp://127.0.0.1:5672/%2F` | AMQP-брокер (plain; TLS — отдельная задача) |
-//! | `PULT_WB_STAT_BASE` | `https://statistics-api.wildberries.ru` | база statistics-API (тест-контур: `https://statistics-api-sandbox.wildberries.ru` — существование проверено живым probing'ом) |
-//! | `PULT_WB_TIMEOUT_SECS` | `30` | таймаут одного WB-запроса |
-//! | `PULT_WB_BODY_LIMIT_MB` | `8` | потолок тела ответа |
-//! | `PULT_WB_MAX_ATTEMPTS` | `5` | попыток на окно (429/сеть) |
-//! | `PULT_SYNC_WINDOW_DAYS` | `7` | окно дат синка |
-//! | `PULT_SYNC_SINCE` | `2019-01-01T00:00:00Z` | старейшая дата истории (WB сам не отдаёт глубже cutoff) |
-//! | `PULT_SCHEDULER_INTERVAL_SECS` | `30` | опрос организаций |
+//! (`DATABASE_URL`, `PULT_VAULT_MASTER_KEY`); воркерская —
+//! [`pult_platform::config::WorkerConfig`] (полная таблица переменных —
+//! в его доке: `PULT_RABBITMQ_URL`, `PULT_WB_STAT_BASE`, тюнинг WB-запросов
+//! и циклов синка; AR-4: значения — константы окружения, не код).
 //!
 //! Секреты: мастер-ключ — из окружения; расшифрованный токен существует
 //! только внутри `process_org` (не логируется, не хранится).
@@ -35,7 +25,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::Utc;
 use lapin::{Connection, ConnectionProperties};
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::watch;
@@ -43,75 +33,11 @@ use tokio::sync::watch;
 use pult_conveyor_adapters::cipher::VaultTokenCipher;
 use pult_conveyor_adapters::wb::WbHttpOrdersSource;
 use pult_core_identity::ports::{EncryptedPayload, MasterKey, TokenCipher};
-use pult_platform::config::ServiceConfig;
+use pult_platform::config::{ServiceConfig, WorkerConfig};
 
 use pult_conveyor_workers::amqp;
 use pult_conveyor_workers::orchestrator::{self, SyncTuning};
 use pult_conveyor_workers::store::{self, PgOrderProjection, PgSyncCheckpointStore};
-
-/// Воркерская конфигурация (см. таблицу в доке модуля).
-#[derive(Debug, Clone)]
-struct WorkerConfig {
-    rabbitmq_url: String,
-    wb_stat_base: String,
-    wb_timeout: Duration,
-    wb_body_limit: u64,
-    wb_max_attempts: u32,
-    window_days: i64,
-    history_since: DateTime<Utc>,
-    scheduler_interval: Duration,
-}
-
-fn env_str(name: &str, default: &str) -> String {
-    std::env::var(name)
-        .ok()
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| default.to_owned())
-}
-
-fn env_parse<T>(name: &str, default: T, parse: fn(&str) -> Option<T>) -> Result<T, String> {
-    match std::env::var(name) {
-        Ok(raw) if !raw.trim().is_empty() => {
-            parse(raw.trim()).ok_or_else(|| format!("переменная {name} невалидна: {raw}"))
-        }
-        _ => Ok(default),
-    }
-}
-
-impl WorkerConfig {
-    fn from_env() -> Result<Self, String> {
-        Ok(Self {
-            rabbitmq_url: env_str("PULT_RABBITMQ_URL", "amqp://127.0.0.1:5672/%2F"),
-            wb_stat_base: env_str("PULT_WB_STAT_BASE", "https://statistics-api.wildberries.ru"),
-            wb_timeout: Duration::from_secs(env_parse("PULT_WB_TIMEOUT_SECS", 30, |s| {
-                s.parse().ok()
-            })?),
-            wb_body_limit: env_parse("PULT_WB_BODY_LIMIT_MB", 8u64, |s| s.parse().ok())?
-                * 1024
-                * 1024,
-            wb_max_attempts: env_parse("PULT_WB_MAX_ATTEMPTS", 5u32, |s| s.parse().ok())?,
-            window_days: env_parse("PULT_SYNC_WINDOW_DAYS", 7i64, |s| s.parse().ok())?,
-            history_since: env_parse("PULT_SYNC_SINCE", default_history_since(), |s| {
-                DateTime::parse_from_rfc3339(s)
-                    .ok()
-                    .map(|ts| ts.with_timezone(&Utc))
-            })?,
-            scheduler_interval: Duration::from_secs(env_parse(
-                "PULT_SCHEDULER_INTERVAL_SECS",
-                30,
-                |s| s.parse().ok(),
-            )?),
-        })
-    }
-}
-
-/// Default старейшей даты истории: 2019-01-01 UTC (детерминирован).
-fn default_history_since() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2019, 1, 1, 0, 0, 0)
-        .single()
-        .expect("2019-01-01 00:00:00 UTC детерминирована")
-}
 
 async fn wait_for_postgres(db: &sqlx::PgPool) -> Result<(), String> {
     for attempt in 1..=30 {
@@ -199,7 +125,7 @@ async fn process_org(
         &cfg.wb_stat_base,
         token,
         cfg.wb_timeout,
-        cfg.wb_body_limit,
+        cfg.wb_body_limit_bytes,
         cfg.wb_max_attempts,
     );
     let tuning = SyncTuning {
@@ -314,7 +240,7 @@ async fn main() {
         Ok(config) => config,
         Err(err) => exit_with_config_error("общая", err),
     };
-    let worker_config = match WorkerConfig::from_env() {
+    let worker_config = match WorkerConfig::from_env(config.environment) {
         Ok(config) => config,
         Err(err) => exit_with_config_error("воркерская", err),
     };
