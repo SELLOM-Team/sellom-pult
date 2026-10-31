@@ -337,3 +337,244 @@ export async function deleteConnection(
     method: 'DELETE',
   })
 }
+
+// --- Прогресс синка и доска заказов (Story 1.4) ---
+
+/** Статус цикла синка: словарь CHECK шлюза + `not_started` (цикла нет). */
+export type SyncStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'needs_retry'
+  | 'superseded'
+  | 'not_started'
+
+/** Фаза цикла (домен core/sync: производная статуса и счётчиков). */
+export type SyncPhase = 'pending' | 'fetching_history' | 'completed'
+
+/** Ответ GET /v1/sync/progress (и POST /v1/sync/retry — единая форма). */
+export interface SyncProgress {
+  status: SyncStatus
+  phase: SyncPhase
+  percent: number
+  eta_seconds: number | null
+  details: {
+    cycle: string
+    windows_total: number
+    windows_done: number
+    orders_fetched: number
+    events_published: number
+    completed_until: string | null
+    error_hint: string | null
+  }
+}
+
+const SYNC_STATUSES: readonly string[] = [
+  'pending',
+  'running',
+  'succeeded',
+  'failed',
+  'needs_retry',
+  'superseded',
+  'not_started',
+]
+
+const SYNC_PHASES: readonly string[] = ['pending', 'fetching_history', 'completed']
+
+/**
+ * Разбор ответа прогресса: чужая форма — invalid_response (паттерн 1.2/1.3).
+ * `percent` зажимается в 0..100, `eta_seconds` — null или неотрицательное
+ * число (шлюз так и отвечает; зажимы — защита витрины от кривых данных).
+ */
+export function parseSyncProgress(body: unknown): SyncProgress {
+  const row = body as Record<string, unknown> | null | undefined
+  const details = row?.details as Record<string, unknown> | null | undefined
+  if (
+    typeof row === 'object' &&
+    row !== null &&
+    typeof row.status === 'string' &&
+    SYNC_STATUSES.includes(row.status) &&
+    typeof row.phase === 'string' &&
+    SYNC_PHASES.includes(row.phase) &&
+    typeof row.percent === 'number' &&
+    (row.eta_seconds === null || typeof row.eta_seconds === 'number') &&
+    typeof details === 'object' &&
+    details !== null &&
+    typeof details.cycle === 'string' &&
+    typeof details.windows_total === 'number' &&
+    typeof details.windows_done === 'number' &&
+    typeof details.orders_fetched === 'number' &&
+    typeof details.events_published === 'number' &&
+    (details.completed_until === null || typeof details.completed_until === 'string') &&
+    (details.error_hint === null || typeof details.error_hint === 'string')
+  ) {
+    return {
+      status: row.status as SyncStatus,
+      phase: row.phase as SyncPhase,
+      percent: Math.max(0, Math.min(100, Math.round(row.percent))),
+      eta_seconds:
+        row.eta_seconds === null ? null : Math.max(0, Math.round(row.eta_seconds)),
+      details: {
+        cycle: details.cycle,
+        windows_total: details.windows_total,
+        windows_done: details.windows_done,
+        orders_fetched: details.orders_fetched,
+        events_published: details.events_published,
+        completed_until: details.completed_until as string | null,
+        error_hint: details.error_hint as string | null,
+      },
+    }
+  }
+  throw new ApiError('invalid_response', 'шлюз вернул прогресс синка неожиданной формы')
+}
+
+/** GET /v1/sync/progress — честный прогресс цикла для пользователя. */
+export async function fetchSyncProgress(ctx: B24PlacementContext): Promise<SyncProgress> {
+  const query = identityQuery(ctx)
+  return parseSyncProgress(
+    await requestJson(`/v1/sync/progress${query ? `?${query}` : ''}`),
+  )
+}
+
+/**
+ * POST /v1/sync/retry — сброс терминального `failed` (идемпотентен: активные
+ * и завершённые циклы — NO-OP, ответ всё равно свежий прогресс).
+ */
+export async function retrySync(ctx: B24PlacementContext): Promise<SyncProgress> {
+  const query = identityQuery(ctx)
+  return parseSyncProgress(
+    await requestJson(`/v1/sync/retry${query ? `?${query}` : ''}`, { method: 'POST' }),
+  )
+}
+
+/** Колонка канбана — 7-словарь FR-16 (контракт БД и API). */
+export type BoardColumnKey =
+  | 'new'
+  | 'assembling'
+  | 'shipping'
+  | 'in_transit'
+  | 'delivered'
+  | 'returned'
+  | 'risk'
+
+/** Все 7 колонок — источник порядка витрины (проверка парсера). */
+export const BOARD_COLUMN_KEYS: readonly BoardColumnKey[] = [
+  'new',
+  'assembling',
+  'shipping',
+  'in_transit',
+  'delivered',
+  'returned',
+  'risk',
+]
+
+/** Позиция карточки заказа. */
+export interface BoardItem {
+  article: string | null
+  size: string | null
+  nm_id: number | null
+  quantity: number
+  total_kopecks: number
+}
+
+/** Карточка заказа на доске (суммы — копейки; форматирование — на витрине). */
+export interface BoardCard {
+  id: string
+  external_order_id: string
+  marketplace: string
+  scheme: string
+  board_column: BoardColumnKey
+  status_code: string | null
+  warehouse: string | null
+  total_kopecks: number
+  currency: string
+  cancelled: boolean
+  order_date: string | null
+  last_change_at: string | null
+  items: BoardItem[]
+}
+
+/** Ответ GET /v1/board/orders (все 7 ключей приходят всегда — контракт). */
+export interface BoardData {
+  columns: Record<BoardColumnKey, BoardCard[]>
+  totals: Record<BoardColumnKey, number>
+}
+
+function parseBoardCard(row: Record<string, unknown>): BoardCard {
+  const column = row.board_column
+  if (
+    typeof row.id === 'string' &&
+    typeof row.external_order_id === 'string' &&
+    typeof row.marketplace === 'string' &&
+    typeof row.scheme === 'string' &&
+    (BOARD_COLUMN_KEYS as readonly unknown[]).includes(column) &&
+    typeof row.total_kopecks === 'number' &&
+    typeof row.currency === 'string' &&
+    typeof row.cancelled === 'boolean' &&
+    (row.status_code === null || typeof row.status_code === 'string') &&
+    (row.warehouse === null || typeof row.warehouse === 'string') &&
+    (row.order_date === null || typeof row.order_date === 'string') &&
+    (row.last_change_at === null || typeof row.last_change_at === 'string') &&
+    Array.isArray(row.items)
+  ) {
+    return {
+      id: row.id,
+      external_order_id: row.external_order_id,
+      marketplace: row.marketplace,
+      scheme: row.scheme,
+      board_column: column as BoardColumnKey,
+      status_code: row.status_code as string | null,
+      warehouse: row.warehouse as string | null,
+      total_kopecks: row.total_kopecks,
+      currency: row.currency,
+      cancelled: row.cancelled,
+      order_date: row.order_date as string | null,
+      last_change_at: row.last_change_at as string | null,
+      items: (row.items as Record<string, unknown>[]).map((item) => ({
+        article: (item.article as string | null) ?? null,
+        size: (item.size as string | null) ?? null,
+        nm_id: (item.nm_id as number | null) ?? null,
+        quantity: typeof item.quantity === 'number' ? item.quantity : 1,
+        total_kopecks: typeof item.total_kopecks === 'number' ? item.total_kopecks : 0,
+      })),
+    }
+  }
+  throw new ApiError('invalid_response', 'шлюз вернул карточку заказа неожиданной формы')
+}
+
+/**
+ * Разбор доски: все 7 ключей columns и totals обязательны (контракт — пустые
+ * колонки приходят явными пустыми массивами, а не отсутствием ключей).
+ */
+export function parseBoardOrders(body: unknown): BoardData {
+  const row = body as Record<string, unknown> | null | undefined
+  const columns = row?.columns as Record<string, unknown> | null | undefined
+  const totals = row?.totals as Record<string, unknown> | null | undefined
+  if (typeof columns !== 'object' || columns === null || typeof totals !== 'object' || totals === null) {
+    throw new ApiError('invalid_response', 'шлюз вернул доску неожиданной формы')
+  }
+  const parsedColumns = {} as Record<BoardColumnKey, BoardCard[]>
+  const parsedTotals = {} as Record<BoardColumnKey, number>
+  for (const key of BOARD_COLUMN_KEYS) {
+    const list = columns[key]
+    const total = totals[key]
+    if (!Array.isArray(list) || typeof total !== 'number') {
+      throw new ApiError('invalid_response', `шлюз вернул доску без колонки «${key}»`)
+    }
+    parsedColumns[key] = list.map((item) => parseBoardCard(item as Record<string, unknown>))
+    parsedTotals[key] = total
+  }
+  return { columns: parsedColumns, totals: parsedTotals }
+}
+
+/**
+ * GET /v1/board/orders — канбан 7 колонок. Честные состояния без заказов
+ * приходят 409-конвертами (sync_in_progress / sync_failed /
+ * sync_not_started / sync_superseded) — они разбираются в ApiError с тем же
+ * кодом, витрина решает, что показывать.
+ */
+export async function fetchBoardOrders(ctx: B24PlacementContext): Promise<BoardData> {
+  const query = identityQuery(ctx)
+  return parseBoardOrders(await requestJson(`/v1/board/orders${query ? `?${query}` : ''}`))
+}

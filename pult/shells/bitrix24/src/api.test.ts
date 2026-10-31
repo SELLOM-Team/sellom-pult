@@ -2,18 +2,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { B24PlacementContext } from './b24'
 import {
   ApiError,
+  BOARD_COLUMN_KEYS,
   CONNECT_TIMEOUT_MS,
   connectMarketplace,
+  fetchBoardOrders,
   fetchConnections,
   deleteConnection,
   fetchOnboardingState,
   fetchPerimeterMetrics,
+  fetchSyncProgress,
   identityQuery,
+  parseBoardOrders,
   parseConnections,
   parseConnectOutcome,
   parseErrorEnvelope,
   parseOnboardingState,
+  parseSyncProgress,
   parseVerdictResponse,
+  retrySync,
   submitVerdict,
 } from './api'
 
@@ -475,5 +481,223 @@ describe('бюджет connectMarketplace покрывает худший слу
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// --- Прогресс синка и доска заказов (Story 1.4) ---
+
+describe('parseSyncProgress — форма прогресса', () => {
+  const body = {
+    status: 'running',
+    phase: 'fetching_history',
+    percent: 40,
+    eta_seconds: 90,
+    details: {
+      cycle: 'initial_orders',
+      windows_total: 5,
+      windows_done: 2,
+      orders_fetched: 12,
+      events_published: 12,
+      completed_until: '2026-10-20T00:00:00+00:00',
+      error_hint: null,
+    },
+  }
+
+  it('валидный ответ разбирается, счётчики на месте', () => {
+    const p = parseSyncProgress(body)
+    expect(p.status).toBe('running')
+    expect(p.phase).toBe('fetching_history')
+    expect(p.percent).toBe(40)
+    expect(p.eta_seconds).toBe(90)
+    expect(p.details.windows_done).toBe(2)
+  })
+
+  it('eta может быть null (оценки нет)', () => {
+    const p = parseSyncProgress({ ...body, eta_seconds: null })
+    expect(p.eta_seconds).toBeNull()
+  })
+
+  it('percent зажимается в 0..100 (защита витрины)', () => {
+    expect(parseSyncProgress({ ...body, percent: 120 }).percent).toBe(100)
+    expect(parseSyncProgress({ ...body, percent: -5 }).percent).toBe(0)
+  })
+
+  it('чужой статус/фаза/форма — invalid_response', () => {
+    expect(() => parseSyncProgress({ ...body, status: 'green' })).toThrowError(ApiError)
+    expect(() => parseSyncProgress({ ...body, phase: 'done' })).toThrowError(ApiError)
+    expect(() => parseSyncProgress({ ...body, details: { nope: 1 } })).toThrowError(ApiError)
+    expect(() => parseSyncProgress(null)).toThrowError(ApiError)
+  })
+})
+
+describe('fetchSyncProgress / retrySync — клиенты синка', () => {
+  const progressBody = {
+    status: 'failed',
+    phase: 'fetching_history',
+    percent: 0,
+    eta_seconds: null,
+    details: {
+      cycle: 'initial_orders',
+      windows_total: 5,
+      windows_done: 0,
+      orders_fetched: 0,
+      events_published: 0,
+      completed_until: null,
+      error_hint: 'токен WB отклонён площадкой',
+    },
+  }
+
+  it('GET с identity-query разбирается', async () => {
+    const fetchMock = vi.fn(async (_url?: string | URL | Request, _init?: RequestInit) =>
+      jsonResponse(progressBody),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const p = await fetchSyncProgress(ctx)
+    expect(p.status).toBe('failed')
+    expect(p.details.error_hint).toContain('токен WB отклонён')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      '/v1/sync/progress?DOMAIN=shop.example&USER_ID=42&PLACEMENT=DEFAULT',
+    )
+  })
+
+  it('POST retry возвращает свежий прогресс', async () => {
+    const fetchMock = vi.fn(async (_url?: string | URL | Request, init?: RequestInit) => {
+      expect(init?.method).toBe('POST')
+      return jsonResponse({ ...progressBody, status: 'pending', phase: 'fetching_history' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const p = await retrySync(ctx)
+    expect(p.status).toBe('pending')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/v1/sync/retry?')
+  })
+})
+
+describe('parseBoardOrders — контракт 7 колонок', () => {
+  function columnBody(overrides?: { columns?: object; totals?: object }) {
+    const columns: Record<string, unknown[]> = {
+      new: [],
+      assembling: [],
+      shipping: [],
+      in_transit: [],
+      delivered: [],
+      returned: [],
+      risk: [],
+    }
+    const totals: Record<string, number> = {
+      new: 0,
+      assembling: 0,
+      shipping: 0,
+      in_transit: 0,
+      delivered: 0,
+      returned: 0,
+      risk: 0,
+    }
+    return { columns: overrides?.columns ?? columns, totals: overrides?.totals ?? totals }
+  }
+
+  const card = {
+    id: '018f3b00-0000-7000-8000-000000000001',
+    external_order_id: '771',
+    marketplace: 'wildberries',
+    scheme: 'fbo',
+    board_column: 'delivered',
+    status_code: '3',
+    warehouse: 'Коледино',
+    total_kopecks: 9000,
+    currency: 'RUB',
+    cancelled: false,
+    order_date: '2026-10-30T16:25:50Z',
+    last_change_at: '2026-10-30T16:25:50Z',
+    items: [{ article: 'ART-DELIVERED', size: 'M', nm_id: 101, quantity: 1, total_kopecks: 9000 }],
+  }
+
+  it('все 7 ключей обязательны — пустые колонки явными массивами', () => {
+    const board = parseBoardOrders(columnBody())
+    expect(Object.keys(board.columns).sort()).toEqual([...BOARD_COLUMN_KEYS].sort())
+    expect(board.totals.risk).toBe(0)
+  })
+
+  it('карточка разбирается с позициями и суммами', () => {
+    const board = parseBoardOrders({
+      ...columnBody(),
+      columns: { ...columnBody().columns, delivered: [card] },
+      totals: { ...columnBody().totals, delivered: 1 },
+    })
+    expect(board.columns.delivered).toHaveLength(1)
+    expect(board.columns.delivered[0]?.items[0]?.article).toBe('ART-DELIVERED')
+    expect(board.columns.delivered[0]?.total_kopecks).toBe(9000)
+  })
+
+  it('отсутствие любой колонки — invalid_response (не тихие пустые)', () => {
+    const broken = columnBody()
+    delete (broken.columns as Record<string, unknown>).risk
+    expect(() => parseBoardOrders(broken)).toThrowError(/без колонки «risk»/)
+  })
+
+  it('totals без чисел — invalid_response', () => {
+    const broken = columnBody()
+    ;(broken.totals as Record<string, unknown>).new = 'много'
+    expect(() => parseBoardOrders(broken)).toThrowError(ApiError)
+  })
+
+  it('чужая карточка — invalid_response', () => {
+    expect(() =>
+      parseBoardOrders({
+        ...columnBody(),
+        columns: { ...columnBody().columns, new: [{ nope: true }] },
+      }),
+    ).toThrowError(ApiError)
+    expect(() =>
+      parseBoardOrders({
+        ...columnBody(),
+        columns: { ...columnBody().columns, new: [{ ...card, board_column: 'super-new' }] },
+      }),
+    ).toThrowError(ApiError)
+  })
+})
+
+describe('fetchBoardOrders — 409-конверты как коды состояний', () => {
+  it('409 sync_in_progress → ApiError с тем же кодом (витрина решает)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(
+          { error: { code: 'sync_in_progress', message: 'синк идёт', request_id: 'r1' } },
+          409,
+        ),
+      ),
+    )
+    const err = await fetchBoardOrders(ctx).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).code).toBe('sync_in_progress')
+  })
+
+  it('200 с доской → данные', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          columns: {
+            new: [],
+            assembling: [],
+            shipping: [],
+            in_transit: [],
+            delivered: [],
+            returned: [],
+            risk: [],
+          },
+          totals: {
+            new: 0,
+            assembling: 0,
+            shipping: 0,
+            in_transit: 0,
+            delivered: 0,
+            returned: 0,
+            risk: 0,
+          },
+        }),
+      ),
+    )
+    await expect(fetchBoardOrders(ctx)).resolves.toHaveProperty('columns')
   })
 })

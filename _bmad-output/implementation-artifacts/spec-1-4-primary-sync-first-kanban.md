@@ -75,8 +75,8 @@ context:
 - [x] `gateway/sync.rs`/`board.rs` — 3 эндпоинта + бюджеты + конверты + placement; Rust-тесты хендлеров (мок-сторы)
 - [x] `platform/config.rs` — `WorkerConfig` (8 переменных конвейера, AR-4) консолидирован из binary-main воркеров; from_lookup-фейки без мутации env; валидация (схема AMQP, http(s)-origin базы, песочница≠prod, нули/отрицательные, RFC3339, МБ→байты checked_mul); Debug-маска AMQP-пароля; 18 тестов веток
 - [x] compose — сервис worker (профиль app: Dockerfile.worker + healthcheck-процесс-зонд); CI-интеграция: заглушка WB (история/пусто/401/429/медленный режим), e2e «заказ в канбане» (4 организации), дубль-событие NO-OP (management-API публикация), чекпоинт-продолжение (kill -9 + фазовый анализ dateFrom), 429-терпимость, plaintext-инварианты
-- [ ] SPA — доска + прогресс + retry + Ozon-копирайт; Vitest: чистые функции (борд-группировка, статус-подсветка, прогресс-скрин из JSON), api-клиент, скелетоны
-- [ ] Верификация: cargo fmt/clippy -D warnings/test --locked; npm test/build; гейты (hexagonal — adapters/workers не зависят от gateway; valkey; vault-grep теперь и на события; bundle AD-30 < 200 КБ gzip)
+- [x] SPA — доска (BoardView: 7 колонок FR-16, карточки с позициями/суммами, «показаны первые N из M», отменённые — метка) + прогресс (SyncProgressView: фаза/%/ETA из JSON, retry при failed, честные ошибки опроса) + Ozon-копирайт; api-клиенты sync/board со строгим парсингом; опрос — единый владелец в Orders (прогресс 5с/доска 10с/финал при succeeded); Vitest: 39 новых тестов (progress view-model 13, board model 12, api 14), скелетоны в загрузке; bundle 79 154 Б gzip < 200 000
+- [x] Верификация: cargo fmt/clippy -D warnings/test --locked (215 Rust); npm test 119/build; гейты AD-1/AD-28/AD-16 PASS; bundle AD-30 79 154 Б gzip; CI integration — полный e2e конвейера (баг декода найден и починен с первого живого прогона, run #36 → фикс)
 - [ ] Спека: задачи → [x], Review Triage Log,Verification-раздел (что проверено CI, что живым токеном — владельцем)
 
 **Acceptance (из epics.md, верифицируется):**
@@ -130,6 +130,19 @@ context:
 - **Чекпоинт-продолжение (AD-3)**: kill -9 (SIGTERM не рвёт цикл — планировщик доводит текущую организацию до конца, это by design graceful-shutdown; честный крах = SIGKILL) на 9-й секунде медленного прогона → статус running, 1≤windows_done≤4, completed_until жив; рестарт → succeeded 5/5; доказательство без пере-чтения: каждое окно фазы-2 СТРОГО старше completed_until на момент краха (python-анализатор dateFrom по логу заглушки), уникальных окон ровно 5, повторён максимум один (оборванный интервал).
 - «Канбан жив»: заказ 771 на доске ci-restart ЕЩЁ ДО рестарта (первое окно от новых — события спроецированы до краха) — доска 200 при running-статусе.
 - Прочие ассерты: eta_seconds=0 и phase=completed на succeeded; percent=0 на failed; платформенные инварианты PG (platform_payload NULL — AD-22; idem-ключи уникальны; 4 хэш-партиции orders); plaintext-токены не в логе воркера и не в ответах API; таблицы 6→9 (sync_runs/orders/order_items); evidence-dump дополнен логами воркеров/заглушки и дампами sync_runs/orders; финальный шаг гасит шлюз+воркеры+заглушку.
+
+### Веха SPA (закрыта)
+
+- Архитектура: «умный» родитель `screens/Orders.tsx` — единственный владелец опроса (прогресс каждые 5с пока цикл активен; доска каждые 10с активного цикла + финальная перезагрузка при терминальном переходе; ручной «Обновить»); SyncProgressView/BoardView — «глупые» рендереры над чистыми функциями (тестируемость паттерна 1.2/1.3).
+- Чистые функции: `sync/progress.ts` (progressView — все 7 статусов: not_started «ждём первый цикл», running с ETA/«оцениваем», needs_retry «продолжится автоматически» БЕЗ кнопки (AD-3 — не человек решает), failed → retry-кнопка + человекочитаемый hint, succeeded 100%, superseded; formatEta; classifyProgressError gateway/network) и `board/model.ts` (boardViewState: 200-с-карточками/пусто/409-коды → syncing/failed/offline/error; formatKopecks с НБСП-группировкой; cardHeadline/itemLine; hiddenCount «показаны первые N из M»).
+- api.ts: parseSyncProgress (строгая форма, percent зажим 0..100) / fetchSyncProgress / retrySync (POST) / parseBoardOrders (все 7 ключей columns+totals обязательны — пустые явными массивами, контракт шлюза) / fetchBoardOrders (409-конверты → ApiError-коды — витрина решает).
+- Интеграция: StartConnection рендерит Orders при verified-WB (после мастера подключения сразу виден прогресс); Ozon verified → копирайт «данные появятся после завершения адаптера (этап 2)».
+- Тесты: 119 SPA (было 80; +39: 13 progress + 12 board model + 14 api). Bundle: 79 154 Б gzip (AD-30 < 200 000; было 72 568 — доска подорожала на ~6,6 КБ).
+
+### Живой CI e2e: найденный баг первой же итерацией (31.10, run #36)
+
+- Прогон #36 доказал ценность e2e: весь конвейер (verified → синк 5 окон → 429-терпимость → 401-диагностика → проекция: 771 delivered/fbo/90₽ + 772 risk/fbs/отменён) — зелёный, НО запрос позиций доски упал вживую: `decoding column 4: Rust type i64 (INT8) not compatible with SQL INT4` — `order_items.quantity` (int) в кортеж i64. Юнит-тесты на фейках sqlx-decode не ловят (runtime-запросы без макросов); до CI запрос позиций ни разу не исполнялся с непустым результатом (пустые доски не доходят до него). Фикс: `quantity::bigint` в SQL + комментарий-предупреждение. Второй баг того же прогона: мой CI-SQL ссылался на несуществующую колонку `sync_runs.completed_until` — чекпоинт лежит в jsonb `checkpoint->>'completed_until'` (исправлены шаг чекпоинт-продолжения и evidence-dump).
+- Урок (в спеку и в будущее): каждая sqlx-строка с непустым результатом обязана пройти живой прогон хотя бы раз — e2e с реальными данными не опционален; decode-типы — часть контракта запроса (i32 для int, i64 только из bigint/кастов).
 
 ### Веха platform/config (закрыта)
 

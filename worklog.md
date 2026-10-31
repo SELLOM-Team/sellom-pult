@@ -544,3 +544,19 @@ Stage Summary:
 - Story 1.4: закрыто 9 из 10 задач. Осталась SPA (доска+прогресс+retry+Ozon-копирайт, Vitest), затем финальная верификация и формальное ревью.
 - CI e2e закрывает матрицу I/O спеки: автостарт/прогресс/чекпоинт/сбой 401/пустая история/дубль/канбан/деградация (последняя — существующие шаги 1.2/1.3).
 - Следующий шаг: SPA-доска; пуш — после зелёного прогона этой вехи (cancel-in-progress, урок Task 18).
+
+---
+Task ID: 20 (продолжение — веха 7: SPA закрыто; живой CI поймал баг декода — починен)
+Agent: main (Z.ai)
+Task: Story 1.4, задача «SPA» (доска+прогресс+retry+Ozon-копирайт) + диагностика и фикс красного CI #36 (первый живой прогон e2e).
+
+Work Log:
+- CI #36 (8885abf): rust/spa/gates зелёные; integration дошёл до шага «конвейер» и упал на доске ci-sync → 503. Evidence-dump (добавленный в эту же веху) дал точную причину БЕЗ повторных прогонов: «store синка: ошибка БД db_err=decoding column 4: Rust type i64 (INT8) not compatible with SQL type INT4» — order_items.quantity (INT4) декодировался в i64; sqlx строг (i64 ↔ только INT8), юнит-тесты на фейках decode не ловят, до этого прогона запрос позиций ни разу не исполнялся с непустым результатом. Весь остальной конвейер в #36 ЗЕЛЁНЫЙ: verified→синк 5 окон→429×2 (Retry-After и без — оба пути паузы)→401-диагностика «токен WB отклонён площадкой»→retry идемпотентен→проекция 771 delivered/fbo/90₽ + 772 risk/fbs/отменён→пустая история 200→failed-доска 409. ФИКСЫ: (1) gateway/board.rs — quantity::bigint в SQL (+комментарий-предупреждение); (2) мой CI-SQL в шаге чекпоинта и evidence-dump ссылался на несуществующую колонку sync_runs.completed_until — чекпоинт лежит в jsonb, исправлено на (checkpoint->>'completed_until').
+- SPA (веха закрыта): screens/Orders.tsx — «умный» родитель, единственный владелец опроса (прогресс 5с при активном цикле; доска 10с активного цикла + финальная перезагрузка на терминальном переходе + ручной «Обновить»; retry при failed через POST /v1/sync/retry); SyncProgressView/BoardView — «глупые» компоненты; чистые функции sync/progress.ts (progressView: 7 статусов — needs_retry БЕЗ кнопки повтора, AD-3 решает конвейер; failed → кнопка+hint; formatEta; classifyProgressError) и board/model.ts (boardViewState 409-коды→честные состояния; formatKopecks НБСП-группировка; hiddenCount «показаны первые N из M»); api.ts +parseSyncProgress/fetchSyncProgress/retrySync/parseBoardOrders/fetchBoardOrders (строгие формы, все 7 ключей колонок обязательны); интеграция в StartConnection при verified-WB; Ozon-копирайт «данные после завершения адаптера (этап 2)»; стили .orders/.progress/.board (сетка 7 колонок minmax(130px) с overflow-x).
+- Исправления по ходу: TS-ошибка BOARD_COLUMN_KEYS includes(unknown) → readonly unknown[]; тест-баг (parseBoardOrders с битой карточкой ожидал успеха — переписан на expect-throw); skeleton в загрузке доски (требование спеки).
+- Верификация локальная: SPA 119 тестов (было 80; +13 progress, +12 board, +14 api), build чистый, bundle 79 154 Б gzip (AD-30 PASS, негатив exit 1); Rust после фикса: fmt PASS, clippy ГРОМКО 0, 215 тестов; YAML CI валиден; гейты AD-1/28/16 PASS.
+
+Stage Summary:
+- Story 1.4: закрыто 9.5 из 10 задач (SPA done локально, CI-фикс запушен — жду зелёный прогон e2e с непустой доской). Остаётся: формальное ревью 4 слоями + Review Triage Log + Verification-раздел спеки + sprint 1-4 → done.
+- Живой e2e окупился с первой итерации: два бага (sqlx-decode INT4/i64; несуществующая колонка в моём CI-SQL) пойманы за один прогон с полным evidence-dump.
+- Следующий шаг: зелёный CI → формальное ревью Story 1.4 (bmad-code-review, 4 слоя) → патчи → спека done → sprint.

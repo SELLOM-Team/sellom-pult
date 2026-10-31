@@ -6,6 +6,7 @@ import type { B24PlacementContext } from '../b24'
 import { fetchConnections, type ConnectionInfo, type MarketplaceId } from '../api'
 import { ConnectMaster } from './connect/ConnectMaster'
 import { MARKETPLACE_LABELS } from './connect/step'
+import { Orders } from './Orders'
 
 /**
  * Экран воронки «Начните подключение» (Story 1.1 — существующий экран;
@@ -145,6 +146,12 @@ export function StartConnection({ placement }: { placement: B24PlacementContext 
             </>
           )}
         </div>
+      )}
+
+      {/* Story 1.4: при verified-WB — прогресс синка и первый канбан (доска
+          оживает по окнам истории); Ozon — честный копирайт до адаптера. */}
+      {phase === 'gateway-up' && connections !== null && !connectionsError && (
+        <Orders ctx={placement} connections={connections} />
       )}
 
       <dl className="context">
