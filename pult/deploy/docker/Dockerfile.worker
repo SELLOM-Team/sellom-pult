@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+# Воркер конвейера «Пульт селлера» (Story 1.4) — упаковка бинарника pult-workers.
+#
+# Сборка (из КОРНЯ репозитория — контекст включает весь workspace):
+#   docker build -f pult/deploy/docker/Dockerfile.worker -t pult-workers:dev .
+# Запуск — сервис `workers` профиля app в deploy/docker-compose.yml:
+#   docker compose -f pult/deploy/docker-compose.yml --profile app up -d --wait
+#
+# Слои: builder (rust:1.99.1-slim — пин toolchain AD-20; тег проверен на
+# Docker Hub 31.10.2026; gcc/libc6-dev нужны ring'у из rustls — состав
+# slim-образа документацией не гарантирован, ставим явно) → runtime
+# (debian:bookworm-slim, без тулчейна; TLS — rustls с webpki-roots, т.е.
+# системные CA и libpq НЕ нужны — чистый Rust-стек).
+#
+# CI (integration-джоба) прогоняет воркер ХОСТ-бинарем — паттерн шлюза 1.3
+# (rust-cache + прямой доступ к локальной WB-заглушке на 127.0.0.1); этот
+# образ — упаковка для dev/deploy, его сборка в CI не выполняется.
+
+FROM rust:1.99.1-slim AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+# Копируем workspace целиком: 13 крейтов связаны path-зависимостями и общим
+# Cargo.lock (частичная копия не собирается); миграции pult/db/ нужны
+# sqlx::migrate! макросу воркера на этапе компиляции.
+COPY pult/ .
+RUN cargo build --release --locked --bin pult-workers
+
+FROM debian:bookworm-slim AS runtime
+COPY --from=builder /build/target/release/pult-workers /usr/local/bin/pult-workers
+RUN useradd --system --no-create-home pult
+USER pult
+# Вся конфигурация — окружение (AR-4): DATABASE_URL, PULT_VAULT_MASTER_KEY
+# (обязателен, AD-16), PULT_RABBITMQ_URL и тюнинг синка — см. docker-compose.yml
+# и доку pult_platform::config::WorkerConfig. Секретов в образе нет.
+ENTRYPOINT ["/usr/local/bin/pult-workers"]

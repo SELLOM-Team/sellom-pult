@@ -1,0 +1,9 @@
+# Спутник Dockerfile.worker (BuildKit): контекст сборки — корень репозитория,
+# образу нужен только pult/ (workspace + миграции). Всё прочее — .git,
+# артефакты сборки, node_modules SPA, BMAD-артефакты — в контекст не тащим.
+*
+!pult/
+!pult/**
+pult/target/
+pult/shells/bitrix24/node_modules/
+pult/shells/bitrix24/dist/

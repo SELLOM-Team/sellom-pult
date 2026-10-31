@@ -2,7 +2,10 @@
 # jobs: rust (fmt + build/clippy/test --locked),
 #       spa (vitest + build + bundle-gate AD-30, PASS и FAIL-направления),
 #       gates (hexagonal-lint AD-1, valkey-grep AD-28 — PASS и FAIL-направления),
-#       integration (compose up --wait + миграции + /health + psql-проверка таблиц).
+#       integration (compose up --wait + миграции + /health + psql-проверка таблиц;
+#         Story 1.4: конвейер e2e — WB-заглушка → quorum-очередь → проекция → канбан,
+#         дубль-событие NO-OP, чекпоинт-продолжение после kill -9, 401≠ретрай,
+#         429-терпимость, plaintext-инварианты).
 name: ci
 
 on:
@@ -280,9 +283,9 @@ jobs:
       - name: диагностика контейнеров при сбое подъёма
         if: failure()
         run: docker compose -f pult/deploy/docker-compose.yml logs --tail 60
-      - name: собрать шлюз
+      - name: собрать шлюз и воркеры конвейера (1.4)
         working-directory: pult
-        run: cargo build --bin pult-gateway --locked
+        run: cargo build --bin pult-gateway --bin pult-workers --locked
       - name: запустить шлюз (миграции применяются на старте)
         working-directory: pult
         run: |
@@ -372,12 +375,12 @@ jobs:
             psql -U pult -d pult -tAc \
             "SELECT count(*) FROM organizations WHERE name = 'ci-sentinel-survives-reup'" \
             | grep -qx '1' || { echo "::error::FAIL: sentinel-строка не пережила повторный up"; exit 1; }
-      - name: psql — 6 таблиц (Story 1.1 + шаг 0 + подключения 1.3) существуют
+      - name: psql — 9 таблиц (Story 1.1 + шаг 0 + подключения 1.3 + синк 1.4) существуют
         run: |
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -tAc \
-            "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('organizations','users','role_assignments','portal_settings','perimeter_verdicts','marketplace_connections')" \
-            | grep -qx '6' || { echo "::error::FAIL: в public не 6 таблиц (Story 1.1 + 1.2 + 1.3)"; exit 1; }
+            "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('organizations','users','role_assignments','portal_settings','perimeter_verdicts','marketplace_connections','sync_runs','orders','order_items')" \
+            | grep -qx '9' || { echo "::error::FAIL: в public не 9 таблиц (Story 1.1 + 1.2 + 1.3 + 1.4)"; exit 1; }
       - name: повторный запуск шлюза — миграции no-op, /ready → ready (идемпотентность)
         working-directory: pult
         run: |
@@ -701,6 +704,402 @@ jobs:
           check_body "GET → пустой список" '"connections":\[\]' /tmp/v5.json
           kill "$(cat /tmp/probe-stub.pid)" 2>/dev/null || true
           echo "verified-лайфсайкл 1.3 подтверждён (save/GET/ротация/DELETE, plaintext не в БД)"
+      - name: "1.4 (e2e) — заглушка WB (история/пустая/401/429) + verified-подключения"
+        run: |
+          # WB-заглушка на 127.0.0.1:18081 — порт проб-заглушки шага 1.3 (та
+          # убита): работающий шлюз gateway-3 уже смотрит на него override'ом —
+          # пробы прав (stocks/goods/filter, любые пути) получают 2xx → verified,
+          # рестарт шлюза не нужен. Путь /api/v1/supplier/orders — «история»:
+          # детерминированные ветки по токену, без интернета (паттерн 1.3).
+          cat > /tmp/wb_stub.py << 'PYEOF'
+          import json, os, time
+          from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+          from datetime import datetime, timedelta, timezone
+
+          now = datetime.now(timezone.utc)
+          def rfc(dt):
+              return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+          yesterday = now - timedelta(days=1)
+          # История: два заказа — структурные ветки словаря статусов (таблица
+          # кодов WB пуста [ASSUMPTION] до живого токена владельца): finished
+          # → delivered, isCancel → risk. Оба менялись вчера → попадают в
+          # первое (самое свежее) окно — «канбан жив» с первого окна.
+          ORDERS = [
+              {"date": rfc(yesterday), "lastChangeDate": rfc(yesterday),
+               "supplierArticle": "ART-DELIVERED", "techSize": "M", "barcode": "2000000000001",
+               "total": 10, "discountPercent": 10, "isCancel": False, "incomeID": 555,
+               "warehouseName": "Коледино", "orderId": 771, "nmId": 101, "subject": "Платья",
+               "category": "Женщинам", "brand": "Бренд", "status": 3, "finished": True,
+               "price": 10000, "totalPrice": 9000},
+              {"date": rfc(yesterday), "lastChangeDate": rfc(yesterday),
+               "supplierArticle": "ART-CANCELLED", "techSize": "L", "barcode": "2000000000002",
+               "total": 10, "discountPercent": 0, "isCancel": True, "incomeID": 0,
+               "warehouseName": "Электросталь", "orderId": 772, "nmId": 102, "subject": "Платья",
+               "category": "Женщинам", "brand": "Бренд", "status": 0, "finished": False,
+               "price": 5000, "totalPrice": 5000},
+          ]
+          # Даты дубля (шаг AD-15): тест переиздаёт событие 771 с ТОЙ же ревизией.
+          with open('/tmp/wb_stub_dates.json', 'w') as f:
+              json.dump({"order_date": rfc(yesterday), "last_change_at": rfc(yesterday)}, f)
+
+          SLOW = '/tmp/wb_stub_slow'   # сценарий чекпоинт-продолжения: пауза на окно
+          hits = [0]
+
+          class Stub(BaseHTTPRequestHandler):
+              def _reply(self, code, body, extra=None):
+                  self.send_response(code)
+                  self.send_header('Content-Type', 'application/json')
+                  for k, v in (extra or {}).items():
+                      self.send_header(k, v)
+                  self.send_header('Content-Length', str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+              def serve(self):
+                  token = self.headers.get('Authorization', '')
+                  ts = time.strftime('%H:%M:%S')
+                  if self.path.startswith('/api/v1/supplier/orders'):
+                      # мёртвый токен: 401 ДО счётчика лимита (не расходует сценарий).
+                      if 'ci-dead-token' in token:
+                          print(f'[{ts}] STUB <- GET {self.path} auth={token} -> 401', flush=True)
+                          self._reply(401, b'{"status":401,"detail":"invalid API access token"}')
+                          return
+                      if os.path.exists(SLOW):
+                          time.sleep(2)
+                      hits[0] += 1
+                      n = hits[0]
+                      if n == 1:
+                          print(f'[{ts}] STUB <- GET {self.path} auth={token} -> 429 (Retry-After: 1)', flush=True)
+                          self._reply(429, b'{"error":"rate limited"}', {'Retry-After': '1'})
+                          return
+                      if n == 2:
+                          print(f'[{ts}] STUB <- GET {self.path} auth={token} -> 429 (без заголовка)', flush=True)
+                          self._reply(429, b'{"error":"rate limited"}')
+                          return
+                      if 'ci-empty-token' in token:
+                          print(f'[{ts}] STUB <- GET {self.path} auth={token} -> 200 []', flush=True)
+                          self._reply(200, b'[]')
+                          return
+                      print(f'[{ts}] STUB <- GET {self.path} auth={token} -> 200 orders=2', flush=True)
+                      self._reply(200, json.dumps(ORDERS).encode())
+                      return
+                  # пробы прав 1.3 (stocks / goods/filter — любые пути): 2xx {} → verified
+                  print(f'[{ts}] STUB <- {self.command} {self.path} auth={token} -> 200 probe', flush=True)
+                  self._reply(200, b'{}')
+              def do_GET(self):
+                  self.serve()
+              def do_POST(self):
+                  self.serve()
+              def log_message(self, *args):
+                  pass
+
+          ThreadingHTTPServer(('127.0.0.1', 18081), Stub).serve_forever()
+          PYEOF
+          nohup python3 /tmp/wb_stub.py > /tmp/wb-stub.log 2>&1 &
+          echo $! > /tmp/wb-stub.pid
+          stub_ok=0
+          for i in $(seq 1 20); do
+            if curl -s --max-time 2 -o /dev/null http://127.0.0.1:18081/any; then stub_ok=1; break; fi
+            sleep 0.5
+          done
+          [ "$stub_ok" = "1" ] || { echo "::error::FAIL: WB-заглушка не поднялась"; cat /tmp/wb-stub.log 2>/dev/null; exit 1; }
+          # PULT_SYNC_SINCE — один на всю джобу (GITHUB_ENV): сетка окон обязана
+          # быть стабильной между запусками воркеров (конфиг-инвариант цикла).
+          echo "PULT_SYNC_SINCE=$(date -u -d '30 days ago' +%Y-%m-%dT00:00:00Z)" >> "$GITHUB_ENV"
+          # Verified-подключения трёх организаций (пробы шлюза идут в заглушку):
+          # рабочая история / пустой кабинет / мёртвый токен.
+          base='http://localhost:8080'
+          for org in 'ci-sync.example|13|ci-wb-sync-token' 'ci-empty.example|12|ci-empty-token' 'ci-dead.example|15|ci-dead-token'; do
+            IFS='|' read -r domain user token <<< "$org"
+            code=$(curl -s --max-time 30 -o /tmp/conn14.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+              -d "{\"marketplace\":\"wildberries\",\"schemes\":[\"fbo\",\"fbs\"],\"token\":\"$token\"}" \
+              "$base/v1/connections?DOMAIN=$domain&USER_ID=$user" || true)
+            [ "$code" = "200" ] && grep -q '"status":"verified"' /tmp/conn14.json \
+              || { echo "::error::FAIL: подключение $domain не verified (код $code): $(cat /tmp/conn14.json 2>/dev/null)"; exit 1; }
+          done
+          echo "заглушка WB поднята, 3 организации verified (история / пусто / мёртвый токен)"
+      - name: "1.4 (e2e) — конвейер: заказ в канбане (happy + пустая история + 401≠ретрай + 429)"
+        run: |
+          base='http://localhost:8080'
+          fail() { echo "::error::FAIL: $1"; exit 1; }
+          psql_count() {
+            docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+              psql -U pult -d pult -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true
+          }
+          start_worker() {
+            DATABASE_URL=postgres://pult:pult@localhost:5432/pult \
+            PULT_RABBITMQ_URL=amqp://pult:pult@127.0.0.1:5672/%2F \
+            PULT_WB_STAT_BASE=http://127.0.0.1:18081 \
+            PULT_SCHEDULER_INTERVAL_SECS=2 \
+            PULT_WB_TIMEOUT_SECS=20 \
+              nohup pult/target/debug/pult-workers > "$1" 2>&1 &
+            echo $! > /tmp/pult-workers.pid
+          }
+          wait_progress() { # qs want timeout_secs out_file
+            local qs="$1" want="$2" tmo="$3" out="$4" ok=""
+            for i in $(seq 1 $((tmo / 2))); do
+              code=$(curl -s --max-time 10 -o "$out" -w '%{http_code}' "$base/v1/sync/progress?$qs" || true)
+              if [ "$code" = "200" ] && grep -q "\"status\":\"$want\"" "$out" 2>/dev/null; then ok=1; break; fi
+              sleep 2
+            done
+            [ -n "$ok" ] || fail "синк ($qs) не достиг $want за ${tmo}с (последний ответ: $(cat "$out" 2>/dev/null))"
+          }
+
+          # Воркер конвейера: расшифровка vault → WB-заглушка → quorum-очередь → проекция.
+          # PULT_SYNC_SINCE приходит из GITHUB_ENV (шаг заглушки).
+          start_worker /tmp/pult-workers.log
+
+          # Happy: 5 окон, 2 заказа (771 delivered / 772 risk), в начале 2×429 — терпим.
+          wait_progress 'DOMAIN=ci-sync.example&USER_ID=13' succeeded 120 /tmp/p14a.json
+          grep -q '"phase":"completed"' /tmp/p14a.json || fail "фаза succeeded ≠ completed: $(cat /tmp/p14a.json)"
+          grep -q '"percent":100' /tmp/p14a.json || fail "percent ≠ 100"
+          grep -q '"eta_seconds":0' /tmp/p14a.json || fail "полный охват → eta 0"
+          grep -q '"windows_total":5' /tmp/p14a.json || fail "windows_total ≠ 5 (сетка PULT_SYNC_SINCE)"
+          grep -q '"windows_done":5' /tmp/p14a.json || fail "windows_done ≠ 5"
+          grep -q '"orders_fetched":2' /tmp/p14a.json || fail "orders_fetched ≠ 2"
+          grep -q '"events_published":2' /tmp/p14a.json || fail "events_published ≠ 2"
+
+          # 429-терпимость: заглушка отдала два 429 подряд (с Retry-After и без) —
+          # адаптер пережил (ассерты выше доказывают чтение окон), улики в логах.
+          grep -q 'WB 429: пауза и повтор' /tmp/pult-workers.log || fail "в логе воркера нет 429-пауз"
+          [ "$(grep -c -- '-> 429' /tmp/wb-stub.log)" = "2" ] || fail "заглушка отдала не ровно 2 лимит-ответа"
+
+          # Пустая история: succeeded + честная пустая доска (200, колонки — явные пустые массивы).
+          wait_progress 'DOMAIN=ci-empty.example&USER_ID=12' succeeded 120 /tmp/p14e.json
+          grep -q '"orders_fetched":0' /tmp/p14e.json || fail "пустая история ≠ 0 заказов"
+          grep -q '"events_published":0' /tmp/p14e.json || fail "пустая история ≠ 0 событий"
+          code=$(curl -s --max-time 10 -o /tmp/b14e.json -w '%{http_code}' "$base/v1/board/orders?DOMAIN=ci-empty.example&USER_ID=12" || true)
+          [ "$code" = "200" ] || fail "доска пустой успешной истории ≠ 200 (честное «заказов пока нет»): $code $(cat /tmp/b14e.json 2>/dev/null)"
+          grep -q '"new":\[\]' /tmp/b14e.json && grep -q '"delivered":\[\]' /tmp/b14e.json \
+            || fail "пустые колонки не явные массивы: $(cat /tmp/b14e.json)"
+
+          # 401 ≠ ретрай: цикл failed с человекочитаемой диагностикой; доска честный 409; ретрай идемпотентен.
+          wait_progress 'DOMAIN=ci-dead.example&USER_ID=15' failed 120 /tmp/p14d.json
+          grep -q '"error_hint":"токен WB отклонён площадкой' /tmp/p14d.json \
+            || fail "error_hint без диагноза 401: $(cat /tmp/p14d.json)"
+          grep -q '"percent":0' /tmp/p14d.json || fail "процент failed-цикла ≠ 0"
+          code=$(curl -s --max-time 10 -o /tmp/b14d.json -w '%{http_code}' "$base/v1/board/orders?DOMAIN=ci-dead.example&USER_ID=15" || true)
+          [ "$code" = "409" ] && grep -q '"code":"sync_failed"' /tmp/b14d.json \
+            || fail "доска failed-синка ≠ 409 sync_failed: $code $(cat /tmp/b14d.json 2>/dev/null)"
+          code=$(curl -s --max-time 10 -o /tmp/r14d.json -w '%{http_code}' -X POST "$base/v1/sync/retry?DOMAIN=ci-dead.example&USER_ID=15" || true)
+          [ "$code" = "200" ] || fail "POST /v1/sync/retry ≠ 200: $code $(cat /tmp/r14d.json 2>/dev/null)"
+          # токен мёртв → после сброса цикл честно падает снова (решает человек)
+          wait_progress 'DOMAIN=ci-dead.example&USER_ID=15' failed 60 /tmp/p14d2.json
+          grep -q '"error_hint":"токен WB отклонён площадкой' /tmp/p14d2.json \
+            || fail "после ретрая 401 не честно failed снова: $(cat /tmp/p14d2.json)"
+
+          # Доска: заказ в канбане — словарь 7 колонок, структурные ветки, totals, позиции.
+          code=$(curl -s --max-time 10 -o /tmp/b14a.json -w '%{http_code}' "$base/v1/board/orders?DOMAIN=ci-sync.example&USER_ID=13" || true)
+          [ "$code" = "200" ] || fail "доска ci-sync ≠ 200: $code $(cat /tmp/b14a.json 2>/dev/null)"
+          grep -q '"external_order_id":"771"' /tmp/b14a.json || fail "заказ 771 не на доске"
+          grep -q '"board_column":"delivered"' /tmp/b14a.json || fail "771 (finished) не в delivered"
+          grep -q '"board_column":"risk"' /tmp/b14a.json || fail "772 (isCancel) не в risk"
+          grep -q '"scheme":"fbo"' /tmp/b14a.json || fail "771 (incomeID=555) не fbo"
+          grep -q '"scheme":"fbs"' /tmp/b14a.json || fail "772 (incomeID=0) не fbs"
+          grep -q '"total_kopecks":9000' /tmp/b14a.json || fail "сумма 771 ≠ 9000 копеек"
+          grep -q '"article":"ART-DELIVERED"' /tmp/b14a.json || fail "позиция карточки без артикула"
+          grep -q '"delivered":1' /tmp/b14a.json || fail "totals.delivered ≠ 1"
+          grep -q '"risk":1}' /tmp/b14a.json || fail "totals.risk ≠ 1"
+
+          # PG-проекция: строки, позиции, уникальные idem-ключи, без сырых строк (AD-22).
+          n=$(psql_count "SELECT count(*) FROM orders o JOIN organizations g ON g.id=o.organization_id WHERE g.b24_member_id='ci-sync.example'")
+          [ "$n" = "2" ] || fail "заказов в проекции ci-sync ≠ 2 ($n)"
+          n=$(psql_count "SELECT count(*) FROM order_items i JOIN orders o ON o.id=i.order_id AND o.organization_id=i.organization_id JOIN organizations g ON g.id=o.organization_id WHERE g.b24_member_id='ci-sync.example'")
+          [ "$n" = "2" ] || fail "позиций заказа ≠ 2 ($n)"
+          n=$(psql_count "SELECT count(*) FROM orders WHERE platform_payload IS NOT NULL")
+          [ "$n" = "0" ] || fail "platform_payload в 1.4 обязан быть NULL ($n строк)"
+          n=$(psql_count "SELECT count(DISTINCT idem_key) FROM orders")
+          m=$(psql_count "SELECT count(*) FROM orders")
+          [ "$n" = "$m" ] || fail "idem-ключи не уникальны ($n из $m)"
+          n=$(psql_count "SELECT count(*) FROM sync_runs")
+          [ "$n" = "3" ] || fail "строк sync_runs ≠ 3 ($n)"
+          n=$(psql_count "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'orders\\_p%'")
+          [ "$n" = "4" ] || fail "хэш-партиций orders ≠ 4 ($n)"
+
+          # Plaintext-инварианты: токены не в логах и не в ответах API.
+          for secret in ci-wb-sync-token ci-empty-token ci-dead-token; do
+            if grep -q "$secret" /tmp/pult-workers.log; then fail "plaintext токена $secret в логе воркера"; fi
+            if grep -q "$secret" /tmp/b14a.json; then fail "plaintext токена $secret в ответе доски"; fi
+          done
+          echo "конвейер 1.4: happy/пусто/401/429 подтверждены (заказ в канбане, честные статусы)"
+      - name: "1.4 (e2e) — дубль события = NO-OP (AD-15, at-least-once)"
+        run: |
+          fail() { echo "::error::FAIL: $1"; exit 1; }
+          psql_count() {
+            docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+              psql -U pult -d pult -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true
+          }
+          org=$(psql_count "SELECT id FROM organizations WHERE b24_member_id = 'ci-sync.example'")
+          [ -n "$org" ] || fail "организация ci-sync не найдена в реестре"
+          # Дубль события 771: ДРУГОЙ event_id/occurred_at, но ТА ЖЕ ревизия
+          # (last_change_at) → тот же sha256 idem-ключ → проекция обязана дать NO-OP.
+          # Публикация — management-API брокера (pult/pult, тег administrator из
+          # rabbitmq.conf): в раннере не нужен pip, только python-stdlib + curl.
+          python3 - "$org" << 'PYEOF' > /tmp/dup_publish.json
+          import json, sys, uuid
+          from datetime import datetime, timezone
+
+          org = sys.argv[1]
+          dates = json.load(open('/tmp/wb_stub_dates.json'))
+          order = {
+              "organization_id": org,
+              "marketplace": "wildberries",
+              "external_order_id": "771",
+              "scheme": "fbo",
+              "board_column": "delivered",
+              "status_code": 3,
+              "is_cancelled": False,
+              "warehouse_name": "Коледино",
+              "order_date": dates["order_date"],
+              "last_change_at": dates["last_change_at"],
+              "items": [{
+                  "supplier_article": "ART-DELIVERED",
+                  "tech_size": "M",
+                  "barcode": "2000000000001",
+                  "nm_id": 101,
+                  "quantity": 1,
+                  "price_kopecks": 10000,
+                  "total_price_kopecks": 9000,
+                  "discount_percent": 10,
+              }],
+              "total_price_kopecks": 9000,
+              "currency": "RUB",
+          }
+          event = {
+              "event_id": str(uuid.uuid4()),
+              "event_type": "order.upserted",
+              "organization_id": org,
+              "occurred_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "schema_version": 1,
+              "order": order,
+          }
+          print(json.dumps({
+              "routing_key": org,
+              "payload": json.dumps(event, ensure_ascii=True),
+              "payload_encoding": "string",
+              "properties": {"content_type": "application/json", "delivery_mode": 2},
+          }))
+          PYEOF
+          code=$(curl -s --max-time 10 -o /tmp/dup_resp.json -w '%{http_code}' -u pult:pult \
+            -H 'Content-Type: application/json' -X POST --data-binary @/tmp/dup_publish.json \
+            'http://127.0.0.1:15672/api/exchanges/%2F/pult.orders/publish' || true)
+          [ "$code" = "200" ] || fail "публикация дубля через management-API не прошла (код $code): $(cat /tmp/dup_resp.json 2>/dev/null)"
+          grep -q '"routed":true' /tmp/dup_resp.json || fail "дубль не маршрутизирован в очередь pult.orders.v1"
+          # Консьюмер обязан забрать дубль (очередь пустеет) и НЕ создать строку (AD-15).
+          depth=""
+          for i in $(seq 1 15); do
+            depth=$(curl -s --max-time 5 -u pult:pult 'http://127.0.0.1:15672/api/queues/%2F/pult.orders.v1' \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("messages", -1))' 2>/dev/null || echo err)
+            [ "$depth" = "0" ] && break
+            sleep 2
+          done
+          [ "$depth" = "0" ] || fail "очередь не опустела после дубля (messages=$depth) — консьюмер не забрал"
+          n=$(psql_count "SELECT count(*) FROM orders o JOIN organizations g ON g.id=o.organization_id WHERE g.b24_member_id='ci-sync.example'")
+          [ "$n" = "2" ] || fail "дубль создал строку! заказов $n вместо 2 (AD-15 нарушен)"
+          n=$(psql_count "SELECT count(*) FROM order_items")
+          [ "$n" = "2" ] || fail "дубль создал позиции! $n вместо 2"
+          echo "дубль события = NO-OP подтверждён (очередь пуста, строк по-прежнему 2)"
+      - name: "1.4 (e2e) — чекпоинт-продолжение: крах воркера (kill -9) → продолжение с чекпоинта (AD-3)"
+        run: |
+          base='http://localhost:8080'
+          fail() { echo "::error::FAIL: $1"; exit 1; }
+          psql_count() {
+            docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+              psql -U pult -d pult -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true
+          }
+          start_worker() {
+            DATABASE_URL=postgres://pult:pult@localhost:5432/pult \
+            PULT_RABBITMQ_URL=amqp://pult:pult@127.0.0.1:5672/%2F \
+            PULT_WB_STAT_BASE=http://127.0.0.1:18081 \
+            PULT_SCHEDULER_INTERVAL_SECS=2 \
+            PULT_WB_TIMEOUT_SECS=20 \
+              nohup pult/target/debug/pult-workers > "$1" 2>&1 &
+            echo $! > /tmp/pult-workers.pid
+          }
+          # Четвёртая организация — её цикл пойдёт под «медленной» заглушкой (2с/окно).
+          code=$(curl -s --max-time 30 -o /tmp/conn14r.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"marketplace":"wildberries","schemes":["fbo"],"token":"ci-restart-token"}' \
+            "$base/v1/connections?DOMAIN=ci-restart.example&USER_ID=14" || true)
+          [ "$code" = "200" ] && grep -q '"status":"verified"' /tmp/conn14r.json \
+            || fail "подключение ci-restart не verified: $code $(cat /tmp/conn14r.json 2>/dev/null)"
+          # Воркер-1 больше не нужен (его циклы терминальны), заглушка станет медленной.
+          kill "$(cat /tmp/pult-workers.pid)" 2>/dev/null || true
+          sleep 2
+          kill -9 "$(cat /tmp/pult-workers.pid)" 2>/dev/null || true
+          touch /tmp/wb_stub_slow
+          start_worker /tmp/pult-workers-2.log
+          # ~9с под медленной заглушкой (2,1с/окно): краш ловит цикл в середине.
+          sleep 9
+          kill -9 "$(cat /tmp/pult-workers.pid)" 2>/dev/null || true
+          sleep 1
+          # Состояние после краха: running + частичный прогресс + живой чекпоинт.
+          st=$(psql_count "SELECT status FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
+          done_n=$(psql_count "SELECT windows_done FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
+          tot=$(psql_count "SELECT windows_total FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
+          cu=$(psql_count "SELECT completed_until::text FROM sync_runs r JOIN organizations g ON g.id=r.organization_id WHERE g.b24_member_id='ci-restart.example'")
+          echo "после kill -9: status=$st windows_done=$done_n/$tot completed_until=$cu"
+          [ "$st" = "running" ] || fail "после краха статус ≠ running ($st)"
+          [ "$tot" = "5" ] || fail "windows_total ≠ 5 ($tot)"
+          [ "$done_n" -ge 1 ] && [ "$done_n" -le 4 ] || fail "windows_done после краха вне [1..4] ($done_n) — тайминг сценария"
+          [ -n "$cu" ] || fail "чекпоинт completed_until пуст"
+          # «Канбан жив»: заказ 771 уже на доске ДО рестарта (первое окно от новых —
+          # события уже спроецированы консьюмером до краха).
+          ok=""
+          for i in $(seq 1 10); do
+            code=$(curl -s --max-time 10 -o /tmp/b14r.json -w '%{http_code}' "$base/v1/board/orders?DOMAIN=ci-restart.example&USER_ID=14" || true)
+            if [ "$code" = "200" ] && grep -q '"external_order_id":"771"' /tmp/b14r.json 2>/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          [ -n "$ok" ] || fail "заказ 771 не на доске ci-restart после первого окна (доска живёт с первого окна)"
+          # Снимок лога заглушки ДО рестарта: запросы фазы-1.
+          grep 'ci-restart-token' /tmp/wb-stub.log | grep -c '/api/v1/supplier/orders' > /tmp/wb_restart_n1 || true
+          rm -f /tmp/wb_stub_slow
+          # Рестарт: планировщик подхватывает running-строку и продолжает с чекпоинта.
+          start_worker /tmp/pult-workers-3.log
+          ok=""
+          for i in $(seq 1 30); do
+            code=$(curl -s --max-time 10 -o /tmp/p14r.json -w '%{http_code}' "$base/v1/sync/progress?DOMAIN=ci-restart.example&USER_ID=14" || true)
+            if [ "$code" = "200" ] && grep -q '"status":"succeeded"' /tmp/p14r.json 2>/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "$ok" ] || fail "после рестарта цикл не дошёл до succeeded ($(cat /tmp/p14r.json 2>/dev/null))"
+          grep -q '"windows_done":5' /tmp/p14r.json || fail "windows_done ≠ 5 после рестарта"
+          grep -q '"percent":100' /tmp/p14r.json || fail "percent ≠ 100 после рестарта"
+          # Доказательство продолжения: все окна фазы-2 СТАРШЕ completed_until на
+          # момент краха (съеденные окна не перечитаны); повторён только оборванный
+          # интервал — единственный допустимый дубль.
+          python3 - "$cu" << 'PYEOF'
+          import re, sys
+          from collections import Counter
+          from datetime import datetime
+
+          cu = datetime.fromisoformat(sys.argv[1].replace('Z', '+00:00'))
+          n1 = int(open('/tmp/wb_restart_n1').read().strip() or '0')
+          lines = [l for l in open('/tmp/wb-stub.log')
+                   if 'ci-restart-token' in l and '/api/v1/supplier/orders' in l]
+          phase1, phase2 = lines[:n1], lines[n1:]
+
+          def datefrom(line):
+              raw = re.search(r'dateFrom=([^& ]+)', line).group(1)
+              return datetime.fromisoformat(raw.replace('Z', '+00:00'))
+
+          assert len(phase1) >= 1, 'нет запросов фазы-1 (крах до первого окна?)'
+          assert phase2, 'нет запросов фазы-2 — рестарт не продолжил цикл'
+          for line in phase2:
+              d = datefrom(line)
+              assert d < cu, f'окно {d} не старше completed_until {cu} — съеденное окно перечитано!'
+          all_dates = [datefrom(l) for l in lines]
+          uniq = len(set(all_dates))
+          assert uniq == 5, f'уникальных окон {uniq} ≠ 5'
+          over = {d: c for d, c in Counter(all_dates).items() if c > 2}
+          assert not over, f'какое-то окно запрошено более 2 раз: {over}'
+          dup = sum(1 for c in Counter(all_dates).values() if c == 2)
+          assert dup <= 1, f'повторённых окон больше одного: {dup}'
+          print(f'ЧЕКПОИНТ-ПРОДОЛЖЕНИЕ OK: фаза-1 {len(phase1)} запросов, фаза-2 {len(phase2)}, '
+                f'окон 5/5 уникальны, повторён только оборванный крахом интервал ({dup})')
+          PYEOF
+          n=$(psql_count "SELECT count(*) FROM orders o JOIN organizations g ON g.id=o.organization_id WHERE g.b24_member_id='ci-restart.example'")
+          [ "$n" = "2" ] || fail "заказов ci-restart после рестарта ≠ 2 ($n)"
+          echo "чекпоинт-продолжение подтверждено (крах посреди цикла, рестарт без пере-чтения съеденных окон)"
       - name: "интеграция — evidence dump при сбое e2e (тела, логи, БД)"
         # Диагностика сбоя 3e5d9d0: тела ответов и логи не сохранялись нигде —
         # единственный упавший шаг оставлял ноль улик. Дамп безвреден при
@@ -711,12 +1110,23 @@ jobs:
           for f in /tmp/s0.json /tmp/s1.json /tmp/s2.json /tmp/s3.json /tmp/v0.json /tmp/v1.json \
                    /tmp/v2.json /tmp/v3.json /tmp/v4.json /tmp/v4b.json /tmp/v5.json /tmp/v6.json /tmp/v7.json \
                    /tmp/c0.json /tmp/c1.json /tmp/c2.json /tmp/c3.json /tmp/c4.json /tmp/c5.json \
-                   /tmp/c6.json /tmp/c7.json /tmp/h3.json /tmp/health.json /tmp/ready.json; do
+                   /tmp/c6.json /tmp/c7.json /tmp/h3.json /tmp/health.json /tmp/ready.json \
+                   /tmp/conn14.json /tmp/conn14r.json /tmp/p14a.json /tmp/p14e.json /tmp/p14d.json \
+                   /tmp/p14d2.json /tmp/p14r.json /tmp/b14a.json /tmp/b14e.json /tmp/b14d.json \
+                   /tmp/b14r.json /tmp/r14d.json /tmp/dup_publish.json /tmp/dup_resp.json; do
             [ -f "$f" ] || continue
             echo "--- $f ---"
             cat "$f" 2>/dev/null || true
             echo
           done
+          echo "=== /tmp/wb-stub.log (заглушка WB 1.4) ==="
+          cat /tmp/wb-stub.log 2>/dev/null || true
+          echo "=== /tmp/pult-workers.log (воркер 1, хвост 120) ==="
+          tail -n 120 /tmp/pult-workers.log 2>/dev/null || true
+          echo "=== /tmp/pult-workers-2.log (воркер до краха, хвост 80) ==="
+          tail -n 80 /tmp/pult-workers-2.log 2>/dev/null || true
+          echo "=== /tmp/pult-workers-3.log (воркер после рестарта, хвост 80) ==="
+          tail -n 80 /tmp/pult-workers-3.log 2>/dev/null || true
           echo "=== /tmp/probe-stub.log ==="
           cat /tmp/probe-stub.log 2>/dev/null || true
           echo "=== /tmp/pult-gateway-3.log (хвост 100) ==="
@@ -724,11 +1134,21 @@ jobs:
           echo "=== marketplace_connections (секреты скрыты — только длины bytea) ==="
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -c "SELECT id, organization_id, marketplace, schemes, status, client_id, key_version, verified_at, created_at, updated_at, length(token_ciphertext) AS ct_len, length(token_nonce) AS nonce_len FROM marketplace_connections" || true
+          echo "=== sync_runs (Story 1.4: циклы, чекпоинты, счётчики) ==="
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -c "SELECT r.organization_id, g.b24_member_id, r.cycle_type, r.status, r.windows_done, r.windows_total, r.orders_fetched, r.events_published, r.completed_until, r.error_hint, r.started_at, r.finished_at FROM sync_runs r JOIN organizations g ON g.id = r.organization_id ORDER BY g.b24_member_id" || true
+          echo "=== orders/order_items (проекция канбана, секретов нет) ==="
+          docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
+            psql -U pult -d pult -c "SELECT o.id, g.b24_member_id, o.marketplace, o.external_order_id, o.scheme, o.board_column, o.status_code, o.total_price, o.is_cancelled FROM orders o JOIN organizations g ON g.id = o.organization_id ORDER BY g.b24_member_id, o.external_order_id" || true
           echo "=== organizations ==="
           docker compose -f pult/deploy/docker-compose.yml exec -T postgres \
             psql -U pult -d pult -c "SELECT id, name, b24_member_id FROM organizations ORDER BY created_at" || true
-      - name: остановить шлюз
+      - name: остановить шлюз, воркеры и заглушки
         if: always()
         run: |
           kill "$(cat /tmp/pult-gateway.pid)" 2>/dev/null || true
-          tail -n 40 /tmp/pult-gateway.log /tmp/pult-gateway-2.log /tmp/pult-gateway-3.log /tmp/probe-stub.log 2>/dev/null || true
+          kill "$(cat /tmp/pult-workers.pid)" 2>/dev/null || true
+          kill -9 "$(cat /tmp/pult-workers.pid)" 2>/dev/null || true
+          kill "$(cat /tmp/wb-stub.pid)" 2>/dev/null || true
+          tail -n 40 /tmp/pult-gateway.log /tmp/pult-gateway-2.log /tmp/pult-gateway-3.log /tmp/probe-stub.log \
+            /tmp/pult-workers.log /tmp/pult-workers-2.log /tmp/pult-workers-3.log /tmp/wb-stub.log 2>/dev/null || true

@@ -63,6 +63,47 @@ services:
       retries: 12
       start_period: 10s
 
+  # Воркер конвейера (Story 1.4): адаптер WB → quorum-очередь → проекция PG.
+  # Профиль app: infra-стек поднимается всегда, воркер — осознанно
+  # (--profile app): требует мастер-ключ vault и решает, куда ходить за
+  # историей (prod WB или песочница).
+  # СБОРКА образа: docker compose ... --profile app build (из корня репо —
+  # контекст). CI (integration) гоняет воркер хост-бинарем (паттерн шлюза
+  # 1.3: rust-cache + доступ к локальной WB-заглушке) — контейнерный прогон
+  # в CI не используется, образ — dev/deploy-упаковка.
+  workers:
+    build:
+      context: ../..
+      dockerfile: pult/deploy/docker/Dockerfile.worker
+    image: pult-workers:dev
+    profiles: ["app"]
+    environment:
+      DATABASE_URL: postgres://pult:pult@postgres:5432/pult
+      # Креды = rabbitmq.conf (default_user bootstrap, см. deploy/rabbitmq/).
+      PULT_RABBITMQ_URL: amqp://pult:pult@rabbitmq:5672/%2F
+      PULT_WB_STAT_BASE: ${PULT_WB_STAT_BASE:-https://statistics-api.wildberries.ru}
+      # Мастер-ключ vault (AD-16). Dev-значение — ТЕСТОВЫЙ ключ, тот же, что
+      # в CI; должен совпадать с ключом шлюза, которым шифровались токены.
+      # Прод-инсталляция передаёт свой через env/secrets (в репо ключа НЕТ).
+      PULT_VAULT_MASTER_KEY: ${PULT_VAULT_MASTER_KEY:-000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f}
+      PULT_SCHEDULER_INTERVAL_SECS: "30"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # Воркер без HTTP-порта: процесс-зонд (PID 1 жив; смерть контейнера
+      # Docker видит и без него). Содержательный liveness-детект цикла
+      # (зависший прогон) — Epic 2, в спеке 1.4 deferred; декоративный зонд
+      # глубже процесса не делаем — ложных «healthy» не даём.
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
 volumes:
   pgdata:
   rabbitdata:
